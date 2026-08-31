@@ -1,0 +1,6 @@
+Elle évite également de choisir une méthode sur la seule base de sa popularité.
+Trier une collection consiste à réorganiser ses éléments selon une règle, par exemple l'ordre alphabétique ou la valeur numérique. La méthode choisie influence le temps de calcul et la mémoire utilisée. Un tri par insertion est facile à comprendre et efficace sur une petite liste presque ordonnée : chaque nouvel élément est déplacé jusqu'à sa position. Pour des volumes plus importants, le tri fusion garantit une complexité en O(n log n), au prix d'une mémoire supplémentaire.
+
+Le tri rapide sélectionne un pivot et répartit les valeurs de part et d'autre. Sa performance moyenne est bonne, mais un mauvais choix de pivot peut conduire à un comportement quadratique. Les bibliothèques standard proposent généralement des implémentations optimisées et testées ; il vaut mieux les utiliser que réécrire une solution fragile sans nécessité.
+
+Avant d'optimiser, il faut définir la comparaison, vérifier le traitement des doublons et mesurer la taille réelle des données. Un algorithme théoriquement rapide peut devenir moins pertinent si les éléments sont coûteux à comparer. Les tests doivent couvrir une liste vide, un seul élément, des valeurs déjà triées, l'ordre inverse et des répétitions. Cette démarche relie la théorie de la complexité à un programme fiable et lisible.

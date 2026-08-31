@@ -1,0 +1,30 @@
+CONTRAT DE PRESTATION DE SERVICES FREELANCE
+
+Entre :
+La société Nova Digital, représentée par M. Thomas Girard, ci-après dénommée "le Client",
+Et M. Yanis Cherif, développeur indépendant, ci-après dénommé "le Prestataire",
+
+Il est convenu ce qui suit :
+
+Article 1 - Objet de la mission
+Le Prestataire s'engage à réaliser le développement d'une application web de gestion
+de stock pour le compte du Client, incluant l'analyse des besoins, le développement
+et la livraison d'une documentation technique.
+
+Article 2 - Durée de la mission
+La mission débutera le 1er septembre 2026 pour une durée estimée de 3 mois, avec possibilité
+de reconduction par avenant.
+
+Article 3 - Rémunération
+Le Prestataire percevra un taux journalier moyen de 450 € HT, facturé mensuellement
+sur présentation d'un relevé d'activité détaillé.
+
+Article 4 - Propriété intellectuelle
+L'ensemble des livrables produits dans le cadre de cette mission devient la propriété
+exclusive du Client à réception du paiement intégral.
+
+Article 5 - Confidentialité
+Le Prestataire s'engage à ne divulguer aucune information confidentielle relative
+au Client pendant et après la durée du contrat.
+
+Fait le 18 juillet 2026, en deux exemplaires.

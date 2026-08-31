@@ -1,0 +1,28 @@
+INTRODUCTION AUX LISTES EN PYTHON
+
+Python propose un type de données très puissant appelé "liste", qui permet de stocker
+une collection ordonnée et modifiable d'éléments.
+
+Création d'une liste :
+    fruits = ["pomme", "banane", "cerise"]
+
+Accès aux éléments :
+On accède à un élément d'une liste via son index, en commençant à 0.
+    premier_fruit = fruits[0]  # "pomme"
+
+Les méthodes courantes :
+- append() : ajoute un élément à la fin de la liste
+- remove() : supprime la première occurrence d'un élément
+- sort() : trie la liste en place
+- reverse() : inverse l'ordre des éléments
+
+Les compréhensions de liste permettent de créer des listes de façon concise :
+    carres = [x**2 for x in range(10)]
+
+Cette syntaxe est très utilisée en Python moderne car elle est à la fois lisible
+et performante par rapport à une boucle for classique avec des appels répétés à append().
+
+Les listes en Python peuvent contenir des éléments de types différents, contrairement
+aux tableaux dans certains langages statiquement typés comme le C ou le Java.
+Il est également possible d'imbriquer des listes pour représenter des matrices
+ou des structures de données plus complexes.

@@ -1,0 +1,22 @@
+BULLETIN DE PAIE — Janvier 2026
+
+Employeur : Nova Digital SAS
+Salarié : Yanis Cherif
+Poste : Développeur full-stack
+Période : du 01/01/2026 au 31/01/2026
+
+Salaire de base                                    3 200,00 €
+Heures supplémentaires                                85,00 €
+
+Cotisations sociales salariales                     -720,40 €
+  dont assurance maladie, retraite, chômage
+
+Salaire net avant impôt                            2 564,60 €
+Prélèvement à la source (taux 8%)                   -205,17 €
+
+NET À PAYER                                        2 359,43 €
+
+Cumul brut depuis le 1er janvier : 3 285,00 €
+Congés payés acquis : 2,08 jours
+
+Date de versement : 31/01/2026

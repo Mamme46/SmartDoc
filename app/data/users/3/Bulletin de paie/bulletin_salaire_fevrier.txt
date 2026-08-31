@@ -1,0 +1,22 @@
+BULLETIN DE PAIE — Février 2026
+
+Employeur : Nova Digital SAS
+Salarié : Yanis Cherif
+Poste : Développeur full-stack
+Période : du 01/02/2026 au 28/02/2026
+
+Salaire de base                                    3 200,00 €
+Prime de performance                                 250,00 €
+
+Cotisations sociales salariales                     -742,80 €
+  dont assurance maladie, retraite, chômage
+
+Salaire net avant impôt                            2 707,20 €
+Prélèvement à la source (taux 8%)                   -216,58 €
+
+NET À PAYER                                        2 490,62 €
+
+Cumul brut depuis le 1er janvier : 6 735,00 €
+Congés payés acquis : 4,16 jours
+
+Date de versement : 28/02/2026

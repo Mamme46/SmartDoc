@@ -1,0 +1,21 @@
+FACTURE D'ENTRETIEN AUTOMOBILE
+
+Garage : Auto Services Plus
+SIRET : 812 345 678 00023
+Date d'intervention : 20 juillet 2026
+
+Client : Nadia Fontaine
+Véhicule : Peugeot 208, immatriculation AB-123-CD
+
+Prestations réalisées :
+- Vidange moteur + filtre à huile : 89,00 €
+- Remplacement plaquettes de frein avant : 145,00 €
+- Contrôle et gonflage des pneus : 10,00 €
+- Main d'œuvre : 60,00 €
+
+Sous-total HT : 254,17 €
+TVA (20%) : 50,83 €
+Total TTC : 305,00 €
+
+Paiement effectué par carte bancaire le jour même.
+Garantie pièces et main d'œuvre : 12 mois.

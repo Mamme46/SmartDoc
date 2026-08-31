@@ -1,0 +1,22 @@
+COMPRENDRE LE MODÈLE OSI EN RÉSEAUX INFORMATIQUES
+
+Le modèle OSI (Open Systems Interconnection) est une représentation théorique
+en sept couches qui décrit comment les données circulent dans un réseau informatique.
+
+Les sept couches, de la plus basse à la plus haute :
+1. Couche physique : transmission des bits sur le support (câbles, ondes radio)
+2. Couche liaison de données : gestion des trames et adressage MAC
+3. Couche réseau : routage des paquets, adressage IP
+4. Couche transport : fiabilité de la transmission (TCP, UDP)
+5. Couche session : établissement et gestion des sessions de communication
+6. Couche présentation : formatage et chiffrement des données
+7. Couche application : interface avec les logiciels utilisateurs (HTTP, FTP, DNS)
+
+Chaque couche communique uniquement avec les couches immédiatement adjacentes,
+ce qui permet une grande modularité : on peut remplacer le protocole d'une couche
+sans affecter les autres.
+
+En pratique, la plupart des réseaux modernes utilisent le modèle TCP/IP, plus simple,
+qui condense certaines de ces couches. Néanmoins, le modèle OSI reste une référence
+pédagogique essentielle pour comprendre le fonctionnement des réseaux, diagnostiquer
+les pannes et concevoir des architectures réseau robustes.

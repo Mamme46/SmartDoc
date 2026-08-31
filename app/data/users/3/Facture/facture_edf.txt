@@ -1,0 +1,20 @@
+FACTURE D'ÉLECTRICITÉ
+
+Fournisseur : EDF Particuliers
+Numéro de facture : F-2026-08-1123
+Date d'émission : 12 août 2026
+Période de consommation : du 1er juillet au 31 juillet 2026
+
+Client : Amélie Dubois
+Adresse : 14 rue des Lilas, 75011 Paris
+
+Détail de la consommation :
+- Consommation électricité : 342 kWh
+- Prix du kWh : 0,2276 €
+- Abonnement mensuel : 15,20 €
+
+Montant total à payer : 93,45 € TTC
+Date limite de paiement : 5 septembre 2026
+Mode de paiement : prélèvement automatique
+
+Merci de votre confiance. Pour toute question, contactez le service client EDF au 3404.

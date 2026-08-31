@@ -1,0 +1,428 @@
+import shutil
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from sklearn.metrics.pairwise import cosine_similarity
+
+from llm import (
+    generate_category_name,
+    find_similar_existing_category_name,
+    is_name_compatible,
+    generate_rag_answer,
+)
+
+
+class SmartDocEngine:
+    """
+    Regroupe toute la logique de classification et de RAG pour 
+    un utilisateur donné (data_path pointe vers son dossier personnel).
+    """
+
+    def __init__(self, data_path, embedding_model, threshold=0.5,
+                 chunk_size=100, chunk_overlap=20):
+
+        self.data_path = Path(data_path)
+        self.embedding_model = embedding_model
+        self.threshold = threshold
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+
+        self.df = pd.DataFrame()
+        self.document_embeddings = None
+        self.category_document_embeddings = {}
+
+        self.chunks_df = pd.DataFrame()
+        self.chunk_embeddings = None
+
+        self.load()
+
+    # --------------------------------------------------------
+    # CHARGEMENT INITIAL
+    # --------------------------------------------------------
+
+    def load(self):
+        """Charge tous les documents existants et construit les index."""
+
+        self.data_path.mkdir(parents=True, exist_ok=True)
+        self._load_documents()
+        self._build_category_embeddings()
+        self._build_chunks()
+
+    def _load_documents(self):
+
+        documents = []
+
+        for category_path in self.data_path.iterdir():
+            if not category_path.is_dir():
+                continue
+
+            category = category_path.name
+
+            for file_path in category_path.glob("*.txt"):
+                text = file_path.read_text(encoding="utf-8", errors="ignore")
+                documents.append({
+                    "filename": file_path.name,
+                    "text": text,
+                    "category": category,
+                    "path": str(file_path)
+                })
+
+        self.df = pd.DataFrame(documents)
+
+        if len(self.df) > 0:
+            self.document_embeddings = self.embedding_model.encode(
+                self.df["text"].tolist(),
+                normalize_embeddings=True
+            )
+        else:
+            self.document_embeddings = np.empty((0, 768))
+
+    def _build_category_embeddings(self):
+
+        self.category_document_embeddings = {}
+
+        if len(self.df) == 0:
+            return
+
+        for category in self.df["category"].unique():
+            mask = self.df["category"].values == category
+            self.category_document_embeddings[category] = list(self.document_embeddings[mask])
+
+    def _build_chunks(self):
+
+        chunk_records = []
+
+        for _, row in self.df.iterrows():
+            chunks = self._chunk_text(row["text"])
+            for i, chunk in enumerate(chunks):
+                chunk_records.append({
+                    "chunk_id": f"{row['filename']}_{i}",
+                    "filename": row["filename"],
+                    "category": row["category"],
+                    "chunk_index": i,
+                    "text": chunk
+                })
+
+        self.chunks_df = pd.DataFrame(chunk_records)
+
+        if len(self.chunks_df) > 0:
+            self.chunk_embeddings = self.embedding_model.encode(
+                self.chunks_df["text"].tolist(),
+                normalize_embeddings=True
+            )
+        else:
+            self.chunk_embeddings = np.empty((0, 768))
+
+    def _chunk_text(self, text):
+
+        words = text.split()
+        chunks = []
+
+        start = 0
+        while start < len(words):
+            end = start + self.chunk_size
+            chunks.append(" ".join(words[start:end]))
+            start += self.chunk_size - self.chunk_overlap
+
+        return chunks
+
+    # --------------------------------------------------------
+    # CLASSIFICATION
+    # --------------------------------------------------------
+
+    def find_best_category(self, document_embedding, top_k=3):
+
+        best_category = None
+        best_score = -1
+        best_document = None
+
+        for category, embeddings_list in self.category_document_embeddings.items():
+
+            category_array = np.atleast_2d(np.array(embeddings_list))
+
+            scores = cosine_similarity(
+                document_embedding.reshape(1, -1),
+                category_array
+            )[0]
+
+            k = min(top_k, len(scores))
+            top_scores = np.sort(scores)[-k:]
+            max_score = float(np.mean(top_scores))
+            max_index = int(np.argmax(scores))
+
+            if max_score > best_score:
+                best_score = max_score
+                best_category = category
+
+                category_df = self.df[self.df["category"] == category].reset_index(drop=True)
+                if max_index < len(category_df):
+                    best_document = category_df.iloc[max_index]["filename"]
+                else:
+                    best_document = "document ajouté dynamiquement"
+
+        return best_category, best_score, best_document
+
+    def create_category(self, category_name, document_embedding):
+
+        self.category_document_embeddings[category_name] = [document_embedding]
+        (self.data_path / category_name).mkdir(parents=True, exist_ok=True)
+
+    def categorize(self, file_path):
+        """
+        Classe un document et le déplace dans le bon dossier.
+        Retourne un dict avec category, score, action, path.
+        """
+
+        file_path = Path(file_path)
+
+        if not file_path.exists():
+            return {"error": f"Fichier introuvable : {file_path}"}
+
+        text = file_path.read_text(encoding="utf-8", errors="ignore")
+
+        if not text.strip():
+            return {"error": f"Le document est vide : {file_path.name}"}
+
+        embedding = self.embedding_model.encode([text], normalize_embeddings=True)[0]
+
+        category, score, closest_document = self.find_best_category(embedding)
+
+        # Un score élevé ne suffit pas : des documents de nature différente
+        # (facture vs contrat, bulletin de paie vs relevé bancaire...) peuvent
+        # être proches en embedding à cause de leur mise en forme commune.
+        # On confirme donc la fusion avec le nom que le LLM donnerait au
+        # document, comparé au nom de la catégorie candidate.
+        proposed_name = generate_category_name(text)
+
+        confident_match = (
+            score >= self.threshold
+            and category is not None
+            and is_name_compatible(proposed_name, category)
+        )
+
+        if confident_match:
+            destination_category = category
+            self.category_document_embeddings[category].append(embedding)
+            action = "existing_category"
+
+        else:
+            existing_match = find_similar_existing_category_name(
+                proposed_name,
+                self.category_document_embeddings.keys()
+            )
+
+            if existing_match:
+                destination_category = existing_match
+                self.category_document_embeddings[existing_match].append(embedding)
+                action = "existing_category"
+            else:
+                destination_category = proposed_name
+                self.create_category(destination_category, embedding)
+                action = "new_category"
+
+        destination_folder = self.data_path / destination_category
+        destination_folder.mkdir(parents=True, exist_ok=True)
+        destination_file = destination_folder / file_path.name
+        file_path.rename(destination_file)
+
+        # Met à jour df et les chunks pour que le document soit immédiatement cherchable
+        self._register_new_document(destination_file, destination_category, text)
+
+        return {
+            "category": destination_category,
+            "score": float(score),
+            "action": action,
+            "path": str(destination_file)
+        }
+
+    def _register_new_document(self, file_path, category, text):
+        """Ajoute le nouveau document à df et met à jour l'index de chunks."""
+
+        new_row = {
+            "filename": file_path.name,
+            "text": text,
+            "category": category,
+            "path": str(file_path)
+        }
+        self.df = pd.concat([self.df, pd.DataFrame([new_row])], ignore_index=True)
+
+        new_chunks = self._chunk_text(text)
+        chunk_records = []
+        for i, chunk in enumerate(new_chunks):
+            chunk_records.append({
+                "chunk_id": f"{file_path.name}_{i}",
+                "filename": file_path.name,
+                "category": category,
+                "chunk_index": i,
+                "text": chunk
+            })
+
+        new_chunks_df = pd.DataFrame(chunk_records)
+        new_chunk_embeddings = self.embedding_model.encode(
+            new_chunks_df["text"].tolist(),
+            normalize_embeddings=True
+        )
+
+        self.chunks_df = pd.concat([self.chunks_df, new_chunks_df], ignore_index=True)
+        self.chunk_embeddings = np.vstack([self.chunk_embeddings, new_chunk_embeddings])
+
+    # --------------------------------------------------------
+    # SUPPRESSION
+    # --------------------------------------------------------
+
+    def delete_document(self, filename):
+        """Supprime un document (fichier + index en mémoire)."""
+
+        rows = self.df[self.df["filename"] == filename]
+        if rows.empty:
+            return {"error": f"Document introuvable : {filename}"}
+
+        category = rows.iloc[0]["category"]
+        file_path = Path(rows.iloc[0]["path"])
+
+        cat_df = self.df[self.df["category"] == category].reset_index(drop=True)
+        position = cat_df.index[cat_df["filename"] == filename][0]
+
+        if category in self.category_document_embeddings:
+            del self.category_document_embeddings[category][position]
+            if not self.category_document_embeddings[category]:
+                del self.category_document_embeddings[category]
+
+        self.df = self.df[self.df["filename"] != filename].reset_index(drop=True)
+
+        keep_mask = (self.chunks_df["filename"] != filename).values
+        self.chunks_df = self.chunks_df[keep_mask].reset_index(drop=True)
+        self.chunk_embeddings = self.chunk_embeddings[keep_mask]
+
+        if file_path.exists():
+            file_path.unlink()
+        if file_path.parent.exists() and not any(file_path.parent.iterdir()):
+            file_path.parent.rmdir()
+
+        return {"deleted": filename, "category": category}
+
+    def delete_category(self, category):
+        """Supprime une catégorie entière (tous ses documents + le dossier)."""
+
+        filenames = self.df[self.df["category"] == category]["filename"].tolist()
+        for filename in filenames:
+            self.delete_document(filename)
+
+        folder = self.data_path / category
+        if folder.exists():
+            shutil.rmtree(folder)
+
+        return {"deleted_category": category, "count": len(filenames)}
+
+    # --------------------------------------------------------
+    # CORRECTION MANUELLE
+    # --------------------------------------------------------
+
+    def correct_classification(self, filename, old_category, new_category):
+        """
+        Déplace un document mal classé de old_category vers new_category
+        (créée si elle n'existe pas encore). Recalcule son embedding et met
+        à jour df / chunks / fichier sur disque en conséquence.
+        """
+
+        rows = self.df[(self.df["filename"] == filename) & (self.df["category"] == old_category)]
+        if rows.empty:
+            return {"error": f"Document introuvable dans {old_category} : {filename}"}
+
+        if old_category == new_category:
+            return {"error": "La nouvelle catégorie est identique à l'ancienne."}
+
+        old_path = Path(rows.iloc[0]["path"])
+        if not old_path.exists():
+            return {"error": f"Fichier introuvable : {old_path}"}
+
+        new_path = self.data_path / new_category / filename
+        if new_path.exists():
+            return {"error": f"Un document nommé {filename} existe déjà dans {new_category}."}
+
+        text = old_path.read_text(encoding="utf-8", errors="ignore")
+        embedding = self.embedding_model.encode([text], normalize_embeddings=True)[0]
+
+        # Retire l'embedding de l'ancienne catégorie
+        cat_df = self.df[self.df["category"] == old_category].reset_index(drop=True)
+        position = cat_df.index[cat_df["filename"] == filename][0]
+        if old_category in self.category_document_embeddings:
+            del self.category_document_embeddings[old_category][position]
+            if not self.category_document_embeddings[old_category]:
+                del self.category_document_embeddings[old_category]
+
+        # L'ajoute à la nouvelle catégorie (la crée si besoin)
+        if new_category in self.category_document_embeddings:
+            self.category_document_embeddings[new_category].append(embedding)
+        else:
+            self.create_category(new_category, embedding)
+
+        # Déplace le fichier physiquement
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.rename(new_path)
+        if old_path.parent.exists() and not any(old_path.parent.iterdir()):
+            old_path.parent.rmdir()
+
+        # Met à jour le document dans df
+        df_index = self.df.index[
+            (self.df["filename"] == filename) & (self.df["category"] == old_category)
+        ][0]
+        self.df.at[df_index, "category"] = new_category
+        self.df.at[df_index, "path"] = str(new_path)
+        self.df.at[df_index, "text"] = text
+
+        # Met à jour les chunks associés (même catégorie, pour rester cohérent avec le RAG)
+        chunk_mask = self.chunks_df["filename"] == filename
+        self.chunks_df.loc[chunk_mask, "category"] = new_category
+
+        return {"corrected": filename, "old_category": old_category, "new_category": new_category}
+
+    # --------------------------------------------------------
+    # RAG / CHATBOT
+    # --------------------------------------------------------
+
+    def search_chunks(self, query, top_k=3):
+
+        if len(self.chunks_df) == 0:
+            return []
+
+        query_embedding = self.embedding_model.encode([query], normalize_embeddings=True)
+        similarities = cosine_similarity(query_embedding, self.chunk_embeddings)[0]
+        top_indices = np.argsort(similarities)[::-1][:top_k]
+
+        results = []
+        for idx in top_indices:
+            results.append({
+                "filename": self.chunks_df.iloc[idx]["filename"],
+                "category": self.chunks_df.iloc[idx]["category"],
+                "chunk_text": self.chunks_df.iloc[idx]["text"],
+                "score": float(similarities[idx])
+            })
+
+        return results
+
+    def answer(self, query, top_k=3):
+
+        relevant_chunks = self.search_chunks(query, top_k=top_k)
+
+        if not relevant_chunks:
+            return {
+                "answer": "Aucun document n'est encore disponible pour répondre à cette question.",
+                "sources": [],
+                "chunks_used": []
+            }
+
+        context = "\n\n".join([
+            f"[Source: {c['filename']}]\n{c['chunk_text']}"
+            for c in relevant_chunks
+        ])
+
+        answer_text = generate_rag_answer(query, context)
+
+        sources = list(dict.fromkeys([c["filename"] for c in relevant_chunks]))
+
+        return {
+            "answer": answer_text,
+            "sources": sources,
+            "chunks_used": relevant_chunks
+        }
