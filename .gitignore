@@ -1,0 +1,5 @@
+ai/.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+**/.embeddings_cache.pkl

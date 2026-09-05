@@ -1,0 +1,22 @@
+# Environnement Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Git
+.git/
+.gitignore
+
+# Entraînement / expérimentation
+ai/data/
+ai/notebooks/
+
+# Tests locaux
+test_documents/
+
+# Fichiers de développement
+.ipynb_checkpoints/
+
+# Base de données locale
+# smartdoc.db est volontairement conservée pour initialiser le conteneur

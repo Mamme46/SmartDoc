@@ -1,4 +1,6 @@
 import shutil
+import pickle
+import hashlib
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -18,6 +20,8 @@ class SmartDocEngine:
     un utilisateur donné (data_path pointe vers son dossier personnel).
     """
 
+    CACHE_FILENAME = ".embeddings_cache.pkl"
+
     def __init__(self, data_path, embedding_model, threshold=0.5,
                  chunk_size=100, chunk_overlap=20):
 
@@ -34,6 +38,8 @@ class SmartDocEngine:
         self.chunks_df = pd.DataFrame()
         self.chunk_embeddings = None
 
+        self._cache = {}
+
         self.load()
 
     # --------------------------------------------------------
@@ -41,16 +47,54 @@ class SmartDocEngine:
     # --------------------------------------------------------
 
     def load(self):
-        """Charge tous les documents existants et construit les index."""
+        """
+        Charge tous les documents existants et construit les index.
+
+        Réutilise un cache d'embeddings sur disque (par utilisateur) pour
+        les documents inchangés depuis le dernier chargement, identifiés par
+        empreinte de leur contenu : seuls les documents nouveaux ou modifiés
+        sont réellement passés dans le modèle d'embeddings.
+        """
 
         self.data_path.mkdir(parents=True, exist_ok=True)
-        self._load_documents()
-        self._build_category_embeddings()
-        self._build_chunks()
 
-    def _load_documents(self):
+        old_cache = self._read_cache()
+        new_cache = {}
+
+        self._load_documents(old_cache, new_cache)
+        self._build_category_embeddings()
+        self._build_chunks(old_cache, new_cache)
+
+        self._cache = new_cache
+        self._write_cache()
+
+    def _cache_path(self):
+        return self.data_path / self.CACHE_FILENAME
+
+    def _read_cache(self):
+        path = self._cache_path()
+        if not path.exists():
+            return {}
+        try:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            return {}
+
+    def _write_cache(self):
+        with open(self._cache_path(), "wb") as f:
+            pickle.dump(self._cache, f)
+
+    @staticmethod
+    def _hash_text(text):
+        return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+    def _load_documents(self, old_cache, new_cache):
 
         documents = []
+        pending_texts = []
+        pending_indices = []
+        cached_embeddings = {}
 
         for category_path in self.data_path.iterdir():
             if not category_path.is_dir():
@@ -60,6 +104,10 @@ class SmartDocEngine:
 
             for file_path in category_path.glob("*.txt"):
                 text = file_path.read_text(encoding="utf-8", errors="ignore")
+                key = f"{category}/{file_path.name}"
+                text_hash = self._hash_text(text)
+
+                index = len(documents)
                 documents.append({
                     "filename": file_path.name,
                     "text": text,
@@ -67,15 +115,34 @@ class SmartDocEngine:
                     "path": str(file_path)
                 })
 
+                cached = old_cache.get(key)
+                if cached is not None and cached.get("hash") == text_hash:
+                    cached_embeddings[index] = cached["embedding"]
+                    new_cache[key] = {"hash": text_hash, "embedding": cached["embedding"]}
+                else:
+                    pending_texts.append(text)
+                    pending_indices.append(index)
+
         self.df = pd.DataFrame(documents)
 
-        if len(self.df) > 0:
-            self.document_embeddings = self.embedding_model.encode(
-                self.df["text"].tolist(),
-                normalize_embeddings=True
-            )
-        else:
+        if len(self.df) == 0:
             self.document_embeddings = np.empty((0, 768))
+            return
+
+        embedding_dim = self.embedding_model.get_embedding_dimension()
+        embeddings = np.empty((len(documents), embedding_dim))
+
+        for index, embedding in cached_embeddings.items():
+            embeddings[index] = embedding
+
+        if pending_texts:
+            fresh = self.embedding_model.encode(pending_texts, normalize_embeddings=True)
+            for index, embedding in zip(pending_indices, fresh):
+                embeddings[index] = embedding
+                key = f"{documents[index]['category']}/{documents[index]['filename']}"
+                new_cache[key] = {"hash": self._hash_text(documents[index]["text"]), "embedding": embedding}
+
+        self.document_embeddings = embeddings
 
     def _build_category_embeddings(self):
 
@@ -88,13 +155,26 @@ class SmartDocEngine:
             mask = self.df["category"].values == category
             self.category_document_embeddings[category] = list(self.document_embeddings[mask])
 
-    def _build_chunks(self):
+    def _build_chunks(self, old_cache, new_cache):
 
         chunk_records = []
+        doc_blocks = []  # (start, chunk_texts, key, text_hash, embeddings_en_cache_ou_None)
 
         for _, row in self.df.iterrows():
-            chunks = self._chunk_text(row["text"])
-            for i, chunk in enumerate(chunks):
+
+            key = f"{row['category']}/{row['filename']}"
+            text_hash = self._hash_text(row["text"])
+            cached = old_cache.get(key)
+
+            if cached is not None and cached.get("hash") == text_hash and "chunk_texts" in cached:
+                chunk_texts = cached["chunk_texts"]
+                cached_chunk_embeddings = cached["chunk_embeddings"]
+            else:
+                chunk_texts = self._chunk_text(row["text"])
+                cached_chunk_embeddings = None
+
+            start = len(chunk_records)
+            for i, chunk in enumerate(chunk_texts):
                 chunk_records.append({
                     "chunk_id": f"{row['filename']}_{i}",
                     "filename": row["filename"],
@@ -103,15 +183,46 @@ class SmartDocEngine:
                     "text": chunk
                 })
 
+            doc_blocks.append((start, chunk_texts, key, text_hash, cached_chunk_embeddings))
+
         self.chunks_df = pd.DataFrame(chunk_records)
 
-        if len(self.chunks_df) > 0:
-            self.chunk_embeddings = self.embedding_model.encode(
-                self.chunks_df["text"].tolist(),
-                normalize_embeddings=True
-            )
-        else:
+        if len(chunk_records) == 0:
             self.chunk_embeddings = np.empty((0, 768))
+            return
+
+        embedding_dim = self.embedding_model.get_embedding_dimension()
+        embeddings = np.empty((len(chunk_records), embedding_dim))
+
+        pending_texts = []
+        pending_ranges = []
+
+        for start, chunk_texts, key, text_hash, cached_chunk_embeddings in doc_blocks:
+            length = len(chunk_texts)
+            entry = new_cache.setdefault(key, {"hash": text_hash})
+
+            if length == 0:
+                entry["chunk_texts"] = []
+                entry["chunk_embeddings"] = np.empty((0, embedding_dim))
+            elif cached_chunk_embeddings is not None:
+                embeddings[start:start + length] = cached_chunk_embeddings
+                entry["chunk_texts"] = chunk_texts
+                entry["chunk_embeddings"] = cached_chunk_embeddings
+            else:
+                pending_texts.extend(chunk_texts)
+                pending_ranges.append((start, length, key, chunk_texts))
+
+        if pending_texts:
+            fresh = self.embedding_model.encode(pending_texts, normalize_embeddings=True)
+            offset = 0
+            for start, length, key, chunk_texts in pending_ranges:
+                block = fresh[offset:offset + length]
+                embeddings[start:start + length] = block
+                new_cache[key]["chunk_texts"] = chunk_texts
+                new_cache[key]["chunk_embeddings"] = block
+                offset += length
+
+        self.chunk_embeddings = embeddings
 
     def _chunk_text(self, text):
 

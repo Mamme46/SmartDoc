@@ -1,0 +1,78 @@
+services:
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: smartdoc-ollama
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+    ports:
+      - "11434:11434"
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: smartdoc-ollama-init
+
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama pull qwen2.5:3b
+
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: smartdoc-app
+
+    ports:
+      - "8501:8501"
+
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+
+      HF_HOME: /root/.cache/huggingface
+      TRANSFORMERS_CACHE: /root/.cache/huggingface
+
+    volumes:
+      # Base de données persistante
+      - ./smartdoc.db:/app/smartdoc.db
+
+      # Documents utilisateurs persistants
+      - ./app/data:/app/app/data
+
+      # Cache du modèle Hugging Face
+      - huggingface_cache:/root/.cache/huggingface
+
+    depends_on:
+      ollama-init:
+        condition: service_completed_successfully
+
+    restart: unless-stopped
+
+
+volumes:
+  ollama_data:
+  huggingface_cache:

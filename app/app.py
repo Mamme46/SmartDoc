@@ -4,8 +4,10 @@ from pathlib import Path
 # Ajoute ai/src au chemin de recherche Python
 sys.path.append(str(Path(__file__).parent.parent / "ai" / "src"))
 
-from embeddings import get_embedding_model
-from engine import SmartDocEngine
+# embeddings/engine ne sont PAS importés ici : ils chargent en cascade
+# sentence-transformers, torch, pandas... (plusieurs secondes). Les importer
+# au niveau module bloquerait l'affichage de la page de connexion, qui n'en
+# a pourtant pas besoin. Voir load_model()/load_engine() ci-dessous.
 
 import streamlit as st
 from streamlit_option_menu import option_menu
@@ -305,6 +307,7 @@ def show_login_page():
 @st.cache_resource(show_spinner=False)
 def load_model():
     """Chargé une seule fois pour toute l'app, peu importe l'utilisateur."""
+    from embeddings import get_embedding_model
     return get_embedding_model()
 
 
@@ -314,6 +317,7 @@ def load_engine(user_id):
     Un moteur par utilisateur. Mis en cache par user_id : Streamlit ne
     recrée l'engine (et ne recalcule les embeddings) que si le user_id change.
     """
+    from engine import SmartDocEngine
     model = load_model()
     user_data_path = Path(__file__).parent / "data" / "users" / str(user_id)
     return SmartDocEngine(data_path=user_data_path, embedding_model=model)

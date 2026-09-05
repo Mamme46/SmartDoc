@@ -1,0 +1,8 @@
+[server]
+# ai/.venv est physiquement dans le dossier du projet : sans cette exclusion,
+# Streamlit essaie de surveiller (pour le rechargement à chaud) chaque
+# sous-module de torch/transformers, y compris ceux en import paresseux qui
+# lèvent des erreurs silencieuses mais coûteuses à chaque tentative.
+# Ça peut ajouter plusieurs dizaines de secondes au premier chargement.
+folderWatchBlacklist = ["ai/.venv"]
+fileWatcherType = "none"
