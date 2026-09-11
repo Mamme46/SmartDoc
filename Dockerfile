@@ -19,8 +19,6 @@ COPY app/ ./app/
 # Code Python IA utilisé par l'application
 COPY ai/src/ ./ai/src/
 
-# Base SQLite
-COPY smartdoc.db ./smartdoc.db
 
 EXPOSE 8501
 
