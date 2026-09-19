@@ -1,6 +1,0 @@
-Elle facilite également l'accueil de nouveaux contributeurs dans le projet.
-Git conserve l'historique d'un projet sous forme de commits, chacun décrivant un état cohérent des fichiers. Travailler sur une branche dédiée permet de développer une fonctionnalité sans perturber la version principale. Les commits gagnent à être petits et accompagnés d'un message explicite : il devient alors facile de comprendre une décision, d'identifier une régression ou de revenir sur une modification précise.
-
-Avant de partager son travail, on met à jour sa branche et on résout les conflits en examinant le contexte de chaque fichier. Une revue de code ne consiste pas seulement à chercher des erreurs de syntaxe ; elle vérifie la lisibilité, les cas limites, la sécurité et la présence de tests adaptés. Les commentaires doivent expliquer un risque concret ou poser une question utile, pas imposer une préférence sans conséquence.
-
-Les fichiers générés, secrets et données volumineuses ne doivent pas être ajoutés par inadvertance. Un fichier d'ignorance adapté et une vérification du diff évitent beaucoup d'incidents. Après validation, la branche peut être fusionnée puis supprimée si elle n'est plus nécessaire. Cette discipline rend le travail collectif plus transparent et permet de livrer des changements réversibles sans multiplier les manipulations difficiles à retracer.

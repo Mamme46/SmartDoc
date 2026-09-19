@@ -1,7 +1,0 @@
-L'apprentissage de la programmation peut commencer par la découverte
-d'un langage comme Python. Les débutants peuvent progressivement apprendre
-à manipuler des variables, des conditions, des boucles et des fonctions.
-Python est également utilisé pour développer des scripts, automatiser des
-tâches et construire des applications. Sa large communauté et son grand
-nombre de bibliothèques permettent ensuite de progresser vers l'analyse
-de données, le développement web et l'intelligence artificielle.

@@ -3,3 +3,24 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 **/.embeddings_cache.pkl
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Training / demo datasets
+ai/data/bbc/
+ai/data/smartdoc_demo/
+
+# User-uploaded documents (real or simulated personal data)
+app/data/users/*/
+!app/data/users/.gitkeep
+app/data/temp_uploads/
+
+# Local test files
+test_documents/
+
+# Env files
+.env
+.env.*

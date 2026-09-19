@@ -1,6 +1,0 @@
-Chaque nouvelle fonctionnalité doit donc être examinée selon les mêmes exigences.
-La sécurité du code se construit dès la conception, car une correction tardive coûte souvent plus cher qu'une prévention simple. Toute donnée reçue d'un utilisateur, d'un fichier ou d'un service externe doit être considérée comme potentiellement incorrecte. La valider selon un schéma précis, limiter sa taille et utiliser des requêtes paramétrées réduit les risques d'injection et de comportements inattendus.
-
-Les permissions suivent le principe du moindre privilège : un compte de service ne reçoit que les accès nécessaires à sa tâche. Les mots de passe et jetons ne sont pas écrits dans le dépôt ; ils sont fournis par un gestionnaire de secrets ou des variables protégées. Les dépendances doivent être mises à jour et analysées, car une bibliothèque abandonnée peut devenir un point d'entrée.
-
-Les messages affichés à l'utilisateur restent généraux, tandis que les journaux internes contiennent assez de contexte pour diagnostiquer un incident sans exposer de données sensibles. Les erreurs doivent être gérées explicitement et les ressources fermées correctement. Des revues régulières, des tests de sécurité et une procédure de signalement complètent les protections techniques. La sécurité est un processus continu qui accompagne les changements du logiciel et de son environnement.

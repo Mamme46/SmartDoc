@@ -1,6 +1,0 @@
-Ils deviennent alors une aide quotidienne plutôt qu'une contrainte ajoutée en fin de projet.
-Les tests logiciels vérifient qu'un programme produit le résultat attendu et qu'il réagit correctement aux erreurs. Un test unitaire cible une fonction isolée avec des entrées contrôlées. Il doit être rapide, déterministe et suffisamment précis pour signaler la cause d'une régression. Les tests d'intégration examinent ensuite les échanges entre plusieurs composants, comme une application et sa base de données.
-
-Écrire des tests ne consiste pas à reproduire uniquement le chemin heureux. Une fonction qui calcule un prix doit être testée avec une valeur nulle, un nombre décimal, une limite et une donnée invalide. Les services externes peuvent être remplacés par des doublures afin d'éviter que le réseau ou l'heure courante ne rende le résultat instable. Les noms de tests décrivent le comportement observé plutôt que l'implémentation interne.
-
-L'intégration continue exécute automatiquement la suite lors de chaque modification importante. Un échec doit être analysé rapidement, car un test ignoré perd sa valeur. La couverture de code donne une indication utile, mais elle ne prouve pas que les scénarios importants sont vérifiés. Une équipe gagne en confiance lorsque les tests accompagnent la conception, documentent les règles métier et restent simples à maintenir.
