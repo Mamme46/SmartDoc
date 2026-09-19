@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 **/.embeddings_cache.pkl
+*.ipynb
 
 # Databases
 *.db
