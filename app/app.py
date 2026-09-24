@@ -13,6 +13,7 @@ import streamlit as st
 from streamlit_option_menu import option_menu
 from auth.database import init_db, log_correction
 from auth.auth import register_user, login_user
+from text_extraction import extract_text
 
 init_db()
 
@@ -202,6 +203,60 @@ def inject_css():
             border-radius: 9px !important;
         }
 
+        /* ---- Champs de saisie ----
+           Filet de sécurité : le [theme] de .streamlit/config.toml force déjà
+           un thème clair, mais si le navigateur a mémorisé une préférence
+           sombre (choisie avant que le menu ne soit masqué), on la corrige ici. */
+        [data-testid="stTextInput"] input,
+        [data-testid="stTextArea"] textarea {
+            background: var(--card) !important;
+            color: var(--ink) !important;
+            border: 1px solid var(--border) !important;
+        }
+        [data-testid="stTextInput"] input::placeholder,
+        [data-testid="stTextArea"] textarea::placeholder {
+            color: var(--muted) !important;
+            opacity: 1;
+        }
+        /* Bouton "afficher le mot de passe" (icône oeil) : le composant interne
+           de Streamlit force son propre fond sombre peu importe le thème, donc
+           on écrase TOUS les éléments internes du champ (approche large mais
+           strictement limitée à l'intérieur de stTextInput). */
+        [data-testid="stTextInput"] * {
+            background-color: var(--card) !important;
+        }
+        [data-testid="stTextInput"] input {
+            color: var(--ink) !important;
+            border: none !important;
+        }
+        [data-testid="stTextInput"] svg,
+        [data-testid="stTextInput"] svg path {
+            fill: var(--muted) !important;
+        }
+        /* Infobulle native "Press Enter to submit form" : Streamlit la
+           positionne en absolu par-dessus le bas du champ au lieu d'en
+           dessous (défaut natif, amplifié ici par le fond blanc qu'on vient
+           de forcer sur tous les enfants du champ) → on la masque. */
+        [data-testid="InputInstructions"] {
+            display: none !important;
+        }
+        [data-testid="stTextInput"] > div {
+            border: 1px solid var(--border) !important;
+            border-radius: 8px !important;
+        }
+
+        /* ---- Onglets Connexion / Inscription ----
+           L'onglet inactif hérite d'une couleur de texte blanche du thème
+           sombre par défaut du navigateur : invisible sur fond clair. */
+        [data-testid="stTabs"] button[role="tab"] {
+            color: var(--danger) !important;
+            opacity: 0.55;
+        }
+        [data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+            color: var(--danger) !important;
+            opacity: 1;
+        }
+
         [data-testid="stFileUploaderDropzone"] {
             border-radius: 12px;
             background: #FBFAFF;
@@ -228,6 +283,80 @@ def inject_css():
         [class*="st-key-open_"] button:hover {
             color: var(--accent) !important;
             text-decoration: underline;
+        }
+
+        /* ---- Chatbot : style conversationnel façon ChatGPT/Claude ----
+           Par défaut, stChatMessage affiche un avatar + un texte dont la
+           couleur suit le thème sombre du navigateur (illisible sur fond
+           clair). On masque les avatars, on aligne l'utilisateur à droite
+           dans une bulle, et la réponse de l'assistant à gauche en texte
+           simple, en forçant systématiquement une couleur de texte lisible. */
+        [data-testid="stChatMessage"] {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 4px 0 !important;
+        }
+        [data-testid="stChatMessageAvatarUser"],
+        [data-testid="stChatMessageAvatarAssistant"] {
+            display: none !important;
+        }
+        [data-testid="stChatMessageContent"] {
+            color: var(--ink) !important;
+        }
+        [data-testid="stChatMessageContent"] p,
+        [data-testid="stChatMessageContent"] li,
+        [data-testid="stChatMessageContent"] span,
+        [data-testid="stChatMessageContent"] code {
+            color: var(--ink) !important;
+        }
+        [data-testid="stChatMessageContent"] [data-testid="stCaptionContainer"],
+        [data-testid="stChatMessageContent"] [data-testid="stCaptionContainer"] * {
+            color: var(--muted) !important;
+        }
+
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+            justify-content: flex-end !important;
+        }
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"])
+            [data-testid="stChatMessageContent"] {
+            background: var(--accent-soft) !important;
+            border-radius: 18px !important;
+            padding: 10px 16px !important;
+            max-width: 72%;
+            margin-left: auto;
+        }
+
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"])
+            [data-testid="stChatMessageContent"] {
+            background: transparent !important;
+            padding: 4px 2px !important;
+            max-width: 100%;
+        }
+
+        /* Barre de saisie flottante en bas de page.
+           Comme pour stTextInput, le composant interne garde un fond sombre
+           venu du thème du navigateur si on ne force pas TOUS ses éléments
+           internes (le conteneur, pas seulement le textarea) ; le bouton
+           d'envoi (rond, accentué) est explicitement exclu pour garder sa
+           couleur. */
+        [data-testid="stBottomBlockContainer"] {
+            background: var(--bg) !important;
+        }
+        [data-testid="stChatInput"] {
+            background-color: var(--card) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 14px !important;
+        }
+        [data-testid="stChatInput"] *:not(button):not(button *) {
+            background-color: var(--card) !important;
+        }
+        [data-testid="stChatInputTextArea"] {
+            color: var(--ink) !important;
+        }
+        [data-testid="stChatInputTextArea"]::placeholder {
+            color: var(--muted) !important;
+            opacity: 1;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -269,8 +398,8 @@ def show_login_page():
 
             with tab_login:
                 with st.form("login_form"):
-                    email = st.text_input("Email")
-                    password = st.text_input("Mot de passe", type="password")
+                    email = st.text_input("Email", placeholder="Adresse e-mail")
+                    password = st.text_input("Mot de passe", type="password", placeholder="Mot de passe")
                     submitted = st.form_submit_button("Se connecter", type="primary", use_container_width=True)
 
                     if submitted:
@@ -284,9 +413,9 @@ def show_login_page():
 
             with tab_register:
                 with st.form("register_form"):
-                    email = st.text_input("Email", key="reg_email")
-                    password = st.text_input("Mot de passe", type="password", key="reg_password")
-                    password_confirm = st.text_input("Confirmer le mot de passe", type="password")
+                    email = st.text_input("Email", key="reg_email", placeholder="Adresse e-mail")
+                    password = st.text_input("Mot de passe", type="password", key="reg_password", placeholder="6 caractères minimum")
+                    password_confirm = st.text_input("Confirmer le mot de passe", type="password", placeholder="Confirmer le mot de passe")
                     submitted = st.form_submit_button("Créer un compte", type="primary", use_container_width=True)
 
                     if submitted:
@@ -402,8 +531,8 @@ def render_import_page(engine):
     with st.container(border=True):
         st.markdown("**📤 Importer un nouveau document**")
         uploaded_file = st.file_uploader(
-            "Dépose un fichier texte (.txt)",
-            type=["txt"],
+            "Dépose un document (.txt, .md, .pdf, .docx)",
+            type=["txt", "md", "pdf", "docx"],
             label_visibility="collapsed"
         )
 
@@ -413,10 +542,26 @@ def render_import_page(engine):
 
                 temp_dir = Path(__file__).parent / "data" / "temp_uploads"
                 temp_dir.mkdir(parents=True, exist_ok=True)
-                temp_path = temp_dir / uploaded_file.name
+                raw_path = temp_dir / uploaded_file.name
 
-                with open(temp_path, "wb") as f:
+                with open(raw_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
+
+                try:
+                    with st.spinner("Extraction du texte..."):
+                        text = extract_text(raw_path)
+                except Exception as exc:
+                    st.error(f"Impossible de lire ce fichier : {exc}")
+                    return
+                finally:
+                    raw_path.unlink(missing_ok=True)
+
+                if not text.strip():
+                    st.error("Aucun texte n'a pu être extrait de ce document.")
+                    return
+
+                temp_path = raw_path.with_suffix(".txt")
+                temp_path.write_text(text, encoding="utf-8")
 
                 with st.spinner("Analyse et classification en cours..."):
                     result = engine.categorize(str(temp_path))

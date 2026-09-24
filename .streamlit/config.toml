@@ -1,3 +1,14 @@
+[theme]
+# Sans ce bloc, Streamlit suit le thème clair/sombre du navigateur du client :
+# les champs de saisie (text_input, etc.) passaient en noir chez les clients
+# en dark mode alors que le reste de l'UI (CSS custom ci-dessous) reste clair.
+# On fige donc un thème clair explicite, cohérent avec les couleurs custom.
+base = "light"
+primaryColor = "#6C5CE7"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F8FC"
+textColor = "#1F2430"
+
 [server]
 # ai/.venv est physiquement dans le dossier du projet : sans cette exclusion,
 # Streamlit essaie de surveiller (pour le rechargement à chaud) chaque
