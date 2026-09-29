@@ -19,6 +19,9 @@ COPY app/ ./app/
 # Code Python IA utilisé par l'application
 COPY ai/src/ ./ai/src/
 
+# Configuration Streamlit (thème, désactivation des détails d'erreur en prod...)
+COPY .streamlit/ ./.streamlit/
+
 
 EXPOSE 8501
 

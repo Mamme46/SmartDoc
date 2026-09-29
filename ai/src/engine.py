@@ -12,6 +12,7 @@ from llm import (
     is_name_compatible,
     generate_rag_answer,
 )
+from text_extraction import extract_text, SUPPORTED_EXTENSIONS
 
 
 class SmartDocEngine:
@@ -23,11 +24,12 @@ class SmartDocEngine:
     CACHE_FILENAME = ".embeddings_cache.pkl"
 
     def __init__(self, data_path, embedding_model, threshold=0.5,
-                 chunk_size=100, chunk_overlap=20):
+                 high_confidence_threshold=0.95, chunk_size=100, chunk_overlap=20):
 
         self.data_path = Path(data_path)
         self.embedding_model = embedding_model
         self.threshold = threshold
+        self.high_confidence_threshold = high_confidence_threshold
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
@@ -102,8 +104,19 @@ class SmartDocEngine:
 
             category = category_path.name
 
-            for file_path in category_path.glob("*.txt"):
-                text = file_path.read_text(encoding="utf-8", errors="ignore")
+            for file_path in sorted(category_path.iterdir()):
+                if not file_path.is_file():
+                    continue
+                if file_path.suffix.lower().lstrip(".") not in SUPPORTED_EXTENSIONS:
+                    continue
+
+                try:
+                    text = extract_text(file_path)
+                except Exception:
+                    # Fichier corrompu ou illisible : on l'ignore plutôt que
+                    # de faire planter le chargement de tout l'espace.
+                    continue
+
                 key = f"{category}/{file_path.name}"
                 text_hash = self._hash_text(text)
 
@@ -242,10 +255,20 @@ class SmartDocEngine:
     # --------------------------------------------------------
 
     def find_best_category(self, document_embedding, top_k=3):
+        """
+        Retourne la meilleure catégorie par score moyen (top-k), ainsi que la
+        meilleure similarité document-à-document trouvée toutes catégories
+        confondues (et sa catégorie). Cette dernière sert à détecter les
+        quasi-doublons même dans une catégorie qui contient déjà plusieurs
+        documents hétérogènes (où la moyenne top-k serait diluée).
+        """
 
         best_category = None
         best_score = -1
         best_document = None
+
+        best_single_score = -1
+        best_single_category = None
 
         for category, embeddings_list in self.category_document_embeddings.items():
 
@@ -271,12 +294,42 @@ class SmartDocEngine:
                 else:
                     best_document = "document ajouté dynamiquement"
 
-        return best_category, best_score, best_document
+            category_single_score = float(scores[max_index])
+            if category_single_score > best_single_score:
+                best_single_score = category_single_score
+                best_single_category = category
+
+        return best_category, best_score, best_document, best_single_category, best_single_score
 
     def create_category(self, category_name, document_embedding):
 
         self.category_document_embeddings[category_name] = [document_embedding]
         (self.data_path / category_name).mkdir(parents=True, exist_ok=True)
+
+    def _remove_existing_document(self, category, filename):
+        """
+        Supprime (embedding + ligne df + chunks) un document de ce nom déjà
+        présent dans cette catégorie précise, s'il existe. Appelé avant de
+        ranger un nouveau document au même endroit, pour remplacer proprement
+        un réimport à l'identique plutôt que de dupliquer l'entrée.
+        """
+
+        mask = (self.df["category"] == category) & (self.df["filename"] == filename)
+        if not mask.any():
+            return
+
+        category_df = self.df[self.df["category"] == category].reset_index(drop=True)
+        position = category_df.index[category_df["filename"] == filename][0]
+
+        if category in self.category_document_embeddings and position < len(self.category_document_embeddings[category]):
+            del self.category_document_embeddings[category][position]
+
+        self.df = self.df[~mask].reset_index(drop=True)
+
+        keep_mask = ~((self.chunks_df["category"] == category) & (self.chunks_df["filename"] == filename))
+        keep_mask = keep_mask.values
+        self.chunks_df = self.chunks_df[keep_mask].reset_index(drop=True)
+        self.chunk_embeddings = self.chunk_embeddings[keep_mask]
 
     def categorize(self, file_path):
         """
@@ -289,23 +342,44 @@ class SmartDocEngine:
         if not file_path.exists():
             return {"error": f"Fichier introuvable : {file_path}"}
 
-        text = file_path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            text = extract_text(file_path)
+        except Exception as exc:
+            return {"error": f"Impossible de lire {file_path.name} : {exc}"}
 
         if not text.strip():
             return {"error": f"Le document est vide : {file_path.name}"}
 
         embedding = self.embedding_model.encode([text], normalize_embeddings=True)[0]
 
-        category, score, closest_document = self.find_best_category(embedding)
+        category, score, closest_document, duplicate_category, duplicate_score = (
+            self.find_best_category(embedding)
+        )
 
-        # Un score élevé ne suffit pas : des documents de nature différente
-        # (facture vs contrat, bulletin de paie vs relevé bancaire...) peuvent
-        # être proches en embedding à cause de leur mise en forme commune.
-        # On confirme donc la fusion avec le nom que le LLM donnerait au
-        # document, comparé au nom de la catégorie candidate.
-        proposed_name = generate_category_name(text)
+        # Un score quasi parfait avec UN document précis (pas la moyenne de la
+        # catégorie, qui serait diluée si la catégorie contient d'autres
+        # documents moins similaires) signifie un document identique ou quasi
+        # identique à un document déjà classé (ex : le même fichier réimporté).
+        # Dans ce cas on fait confiance à l'embedding seul : appeler le LLM
+        # pour "confirmer" par un nom de catégorie n'apporte rien et peut au
+        # contraire faire échouer un doublon évident, le LLM n'étant pas
+        # parfaitement déterministe d'un appel à l'autre.
+        very_confident_match = (
+            duplicate_category is not None and duplicate_score >= self.high_confidence_threshold
+        )
+        if very_confident_match:
+            category = duplicate_category
 
-        confident_match = (
+        if not very_confident_match:
+            # Un score élevé mais pas quasi parfait ne suffit pas : des
+            # documents de nature différente (facture vs contrat, bulletin de
+            # paie vs relevé bancaire...) peuvent être proches en embedding à
+            # cause de leur mise en forme commune. On confirme donc la fusion
+            # avec le nom que le LLM donnerait au document, comparé au nom de
+            # la catégorie candidate.
+            proposed_name = generate_category_name(text)
+
+        confident_match = very_confident_match or (
             score >= self.threshold
             and category is not None
             and is_name_compatible(proposed_name, category)
@@ -313,6 +387,10 @@ class SmartDocEngine:
 
         if confident_match:
             destination_category = category
+            # Réimport exact d'un fichier déjà classé ici : on remplace son
+            # ancienne entrée au lieu d'en dupliquer une nouvelle (sinon deux
+            # lignes identiques category+filename cassent l'affichage).
+            self._remove_existing_document(destination_category, file_path.name)
             self.category_document_embeddings[category].append(embedding)
             action = "existing_category"
 
@@ -324,6 +402,7 @@ class SmartDocEngine:
 
             if existing_match:
                 destination_category = existing_match
+                self._remove_existing_document(destination_category, file_path.name)
                 self.category_document_embeddings[existing_match].append(embedding)
                 action = "existing_category"
             else:
@@ -425,6 +504,39 @@ class SmartDocEngine:
 
         return {"deleted_category": category, "count": len(filenames)}
 
+    def rename_category(self, old_name, new_name):
+        """Renomme une catégorie : déplace son dossier et met à jour df/chunks/embeddings."""
+
+        old_name = old_name.strip()
+        new_name = new_name.strip()
+
+        if not new_name:
+            return {"error": "Le nouveau nom ne peut pas être vide."}
+        if new_name == old_name:
+            return {"error": "Ce nom est déjà celui du dossier."}
+        if new_name in self.category_document_embeddings:
+            return {"error": f"Une catégorie nommée {new_name} existe déjà."}
+
+        old_folder = self.data_path / old_name
+        if not old_folder.exists():
+            return {"error": f"Dossier introuvable : {old_name}"}
+
+        new_folder = self.data_path / new_name
+        old_folder.rename(new_folder)
+
+        mask = self.df["category"] == old_name
+        self.df.loc[mask, "path"] = self.df.loc[mask, "path"].apply(
+            lambda p: str(new_folder / Path(p).name)
+        )
+        self.df.loc[mask, "category"] = new_name
+
+        self.category_document_embeddings[new_name] = self.category_document_embeddings.pop(old_name)
+
+        chunk_mask = self.chunks_df["category"] == old_name
+        self.chunks_df.loc[chunk_mask, "category"] = new_name
+
+        return {"renamed_category": old_name, "to": new_name}
+
     # --------------------------------------------------------
     # CORRECTION MANUELLE
     # --------------------------------------------------------
@@ -451,7 +563,11 @@ class SmartDocEngine:
         if new_path.exists():
             return {"error": f"Un document nommé {filename} existe déjà dans {new_category}."}
 
-        text = old_path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            text = extract_text(old_path)
+        except Exception as exc:
+            return {"error": f"Impossible de lire {filename} : {exc}"}
+
         embedding = self.embedding_model.encode([text], normalize_embeddings=True)[0]
 
         # Retire l'embedding de l'ancienne catégorie

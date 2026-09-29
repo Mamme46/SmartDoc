@@ -1,4 +1,6 @@
 import sys
+import base64
+import html as html_lib
 from pathlib import Path
 
 # Ajoute ai/src au chemin de recherche Python
@@ -11,7 +13,14 @@ sys.path.append(str(Path(__file__).parent.parent / "ai" / "src"))
 
 import streamlit as st
 from streamlit_option_menu import option_menu
-from auth.database import init_db, log_correction
+from auth.database import (
+    init_db,
+    log_correction,
+    create_session,
+    get_session_user_id,
+    delete_session,
+    get_user_by_id,
+)
 from auth.auth import register_user, login_user
 from text_extraction import extract_text
 
@@ -263,14 +272,68 @@ def inject_css():
             border: 1.5px dashed #D6D2F5;
         }
 
-        /* ---- Boutons icône (suppression) ---- */
+        /* ---- Bouton icône (suppression d'un document) ---- */
         [class*="st-key-del_doc_"] button {
             padding: 4px 10px !important;
             border-radius: 8px !important;
+            color: var(--muted) !important;
+        }
+        [class*="st-key-del_doc_"] button:hover {
+            color: var(--danger) !important;
+            border-color: var(--danger) !important;
         }
 
-        /* ---- Nom de document cliquable (façon lien) ---- */
-        [class*="st-key-open_"] button {
+        /* ---- Menu ⋮ du dossier (renommer / supprimer) ----
+           Le déclencheur du popover est un petit bouton icône seule, qui
+           flotte sur l'en-tête du dossier : st.expander ne permet pas
+           d'insérer un widget directement dans sa ligne d'en-tête
+           (cliquable, gérée par Streamlit), donc on superpose la première
+           ligne du contenu par un margin négatif. pointer-events: none sur
+           la ligne évite de bloquer le clic sur l'en-tête ; réactivé juste
+           sur le bouton. Le panneau du popover, lui, s'affiche normalement
+           (positionné par Streamlit), aucun hack n'est nécessaire dessus. */
+        [class*="st-key-cat_menu_"] [data-testid="stPopoverButton"] {
+            padding: 2px 6px !important;
+            min-height: 26px !important;
+            border-radius: 8px !important;
+            color: var(--muted) !important;
+        }
+        [class*="st-key-cat_menu_"] [data-testid="stPopoverButton"]:hover {
+            color: var(--accent) !important;
+            border-color: var(--accent) !important;
+        }
+        [class*="st-key-cat_menu_"] [data-testid="stPopoverButton"] svg {
+            width: 16px !important;
+            height: 16px !important;
+        }
+        [data-testid="stExpanderDetails"] [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:first-of-type [data-testid="stHorizontalBlock"] {
+            margin-top: -63px;
+            position: relative;
+            z-index: 2;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+        }
+        [data-testid="stExpanderDetails"] [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:first-of-type button {
+            pointer-events: auto;
+        }
+
+        /* Dans le panneau du menu ⋮ : l'action "Supprimer" est en rouge. */
+        [class*="st-key-confirm_del_cat_"] button {
+            color: var(--danger) !important;
+            border-color: var(--danger) !important;
+        }
+        [class*="st-key-confirm_del_cat_"] button:hover {
+            background: var(--danger) !important;
+            color: #FFFFFF !important;
+        }
+
+        /* ---- Nom de document cliquable (façon lien) ----
+           st.button rend un <button>, st.link_button rend un <a> : on style
+           les deux de la même façon pour que PDF/DOCX/TXT soient identiques
+           visuellement malgré des widgets différents en interne. */
+        [class*="st-key-open_"] button,
+        [class*="st-key-open_"] a {
             background: transparent !important;
             border: none !important;
             box-shadow: none !important;
@@ -279,10 +342,12 @@ def inject_css():
             font-weight: 400 !important;
             justify-content: flex-start !important;
             width: auto !important;
+            text-decoration: none !important;
         }
-        [class*="st-key-open_"] button:hover {
+        [class*="st-key-open_"] button:hover,
+        [class*="st-key-open_"] a:hover {
             color: var(--accent) !important;
-            text-decoration: underline;
+            text-decoration: underline !important;
         }
 
         /* ---- Chatbot : style conversationnel façon ChatGPT/Claude ----
@@ -368,6 +433,21 @@ if "user_id" not in st.session_state:
     st.session_state.user_id = None
     st.session_state.email = None
 
+    # Un rafraîchissement de page (F5) démarre une toute nouvelle session
+    # Streamlit : sans ce jeton porté par l'URL, l'utilisateur perdrait sa
+    # connexion et sa page à chaque refresh. Le jeton (non devinable) sert
+    # de clé de session côté serveur ; seul lui apparaît dans l'URL, jamais
+    # l'identifiant utilisateur, pour éviter qu'on puisse usurper un compte
+    # en modifiant l'URL.
+    session_token = st.query_params.get("session")
+    if session_token:
+        restored_user_id = get_session_user_id(session_token)
+        if restored_user_id is not None:
+            user = get_user_by_id(restored_user_id)
+            if user is not None:
+                st.session_state.user_id = restored_user_id
+                st.session_state.email = user["email"]
+
 
 # ============================================================
 # PAGE DE CONNEXION
@@ -407,6 +487,7 @@ def show_login_page():
                         if success:
                             st.session_state.user_id = result
                             st.session_state.email = email
+                            st.query_params["session"] = create_session(result)
                             st.rerun()
                         else:
                             st.error(result)
@@ -456,6 +537,9 @@ def load_engine(user_id):
 # SIDEBAR
 # ============================================================
 
+PAGES = ["Import", "Mes documents", "Chatbot"]
+
+
 def render_sidebar():
 
     with st.sidebar:
@@ -470,11 +554,16 @@ def render_sidebar():
             unsafe_allow_html=True
         )
 
+        # Retrouve la page active après un rafraîchissement de page (F5),
+        # sinon un refresh ramènerait toujours sur "Import" (default_index).
+        current_page = st.query_params.get("page")
+        default_index = PAGES.index(current_page) if current_page in PAGES else 0
+
         selected = option_menu(
             menu_title=None,
-            options=["Import", "Mes documents", "Chatbot"],
+            options=PAGES,
             icons=["upload", "folder2-open", "chat-dots"],
-            default_index=0,
+            default_index=default_index,
             styles={
                 "container": {"padding": "0", "background-color": "#FFFFFF"},
                 "icon": {"color": "#6B7280", "font-size": "15px"},
@@ -497,6 +586,9 @@ def render_sidebar():
             },
         )
 
+        if selected != current_page:
+            st.query_params["page"] = selected
+
         with st.container(key="sd_footer"):
             initial = (st.session_state.email or "?")[0].upper()
             st.markdown(
@@ -509,8 +601,12 @@ def render_sidebar():
                 unsafe_allow_html=True
             )
             if st.button("↩  Déconnexion", key="logout_btn", use_container_width=True):
+                session_token = st.query_params.get("session")
+                if session_token:
+                    delete_session(session_token)
                 st.session_state.user_id = None
                 st.session_state.email = None
+                st.query_params.clear()
                 st.rerun()
 
     return selected
@@ -552,19 +648,19 @@ def render_import_page(engine):
                         text = extract_text(raw_path)
                 except Exception as exc:
                     st.error(f"Impossible de lire ce fichier : {exc}")
-                    return
-                finally:
                     raw_path.unlink(missing_ok=True)
+                    return
 
                 if not text.strip():
                     st.error("Aucun texte n'a pu être extrait de ce document.")
+                    raw_path.unlink(missing_ok=True)
                     return
 
-                temp_path = raw_path.with_suffix(".txt")
-                temp_path.write_text(text, encoding="utf-8")
-
+                # Le fichier original (pas une version .txt convertie) est
+                # rangé tel quel : l'utilisateur doit pouvoir le retrouver
+                # ensuite dans son format d'origine (PDF, DOCX...).
                 with st.spinner("Analyse et classification en cours..."):
-                    result = engine.categorize(str(temp_path))
+                    result = engine.categorize(str(raw_path))
 
                 if "error" in result:
                     st.error(result["error"])
@@ -591,6 +687,70 @@ def show_document_dialog(filename, text):
     st.text_area("Contenu", text, height=420, disabled=True, label_visibility="collapsed")
 
 
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def render_document_opener(category, doc):
+    """
+    Ouvre le document dans son format d'origine : un PDF s'ouvre dans un
+    nouvel onglet (le navigateur l'affiche nativement), un DOCX se télécharge
+    (le navigateur/l'OS l'ouvre ensuite avec Word) ; un .txt/.md garde
+    l'aperçu texte, plus simple et suffisant pour ces formats.
+    """
+
+    filename = doc["filename"]
+    extension = Path(filename).suffix.lower()
+    key = f"open_{category}_{filename}"
+
+    if extension == ".pdf":
+        # st.markdown(unsafe_allow_html=True) supprime les attributs on* (pas
+        # de JS exécutable) : impossible d'y mettre un onclick. Et Chrome/Edge
+        # bloquent la navigation en plein onglet vers une URL data: (anti-
+        # phishing), donc <a href="data:..." target="_blank"> ne marche pas
+        # non plus. st.components.v1.html rend dans un vrai <iframe> qui,
+        # lui, exécute le JS : on y construit un Blob et on ouvre son URL
+        # blob:, qui n'est pas soumise à cette restriction.
+        file_bytes = Path(doc["path"]).read_bytes()
+        b64 = base64.b64encode(file_bytes).decode()
+        safe_filename = html_lib.escape(filename)
+        st.iframe(
+            f"""
+            <button id="btn" style="
+                background: transparent; border: none; box-shadow: none;
+                padding: 2px 4px; color: #1F2430; font-weight: 400;
+                font-size: 14px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                cursor: pointer; text-align: left;"
+                onmouseover="this.style.color='#6C5CE7'; this.style.textDecoration='underline';"
+                onmouseout="this.style.color='#1F2430'; this.style.textDecoration='none';"
+            >📄 {safe_filename}</button>
+            <script>
+                document.getElementById('btn').addEventListener('click', function() {{
+                    const byteChars = atob('{b64}');
+                    const byteNumbers = new Array(byteChars.length);
+                    for (let i = 0; i < byteChars.length; i++) {{ byteNumbers[i] = byteChars.charCodeAt(i); }}
+                    const blob = new Blob([new Uint8Array(byteNumbers)], {{type: 'application/pdf'}});
+                    window.open(URL.createObjectURL(blob), '_blank');
+                }});
+            </script>
+            """,
+            height=32,
+        )
+
+    elif extension == ".docx":
+        file_bytes = Path(doc["path"]).read_bytes()
+        st.download_button(
+            f"📄 {filename}",
+            data=file_bytes,
+            file_name=filename,
+            mime=DOCX_MIME,
+            key=key,
+        )
+
+    else:
+        if st.button(f"📄 {filename}", key=key):
+            show_document_dialog(filename, doc["text"])
+
+
 def render_documents_page(engine):
 
     st.markdown('<div class="page-title">Mes documents</div>', unsafe_allow_html=True)
@@ -608,11 +768,40 @@ def render_documents_page(engine):
             doc_count = len(engine.df[engine.df["category"] == category])
             with st.expander(f"📁 {category}  ·  {doc_count} document{'s' if doc_count > 1 else ''}"):
 
-                col_del, _ = st.columns([1, 3])
-                with col_del:
-                    if st.button("🗑️ Supprimer ce dossier", key=f"del_cat_{category}"):
-                        engine.delete_category(category)
-                        st.rerun()
+                _, col_menu = st.columns([7, 1])
+                with col_menu:
+                    with st.popover(
+                        "",
+                        icon=":material/more_vert:",
+                        key=f"cat_menu_{category}",
+                        help="Options du dossier",
+                    ):
+                        new_name = st.text_input(
+                            "Renommer le dossier",
+                            value=category,
+                            key=f"rename_cat_{category}",
+                        )
+                        if st.button(
+                            "Renommer",
+                            icon=":material/edit:",
+                            key=f"confirm_rename_cat_{category}",
+                            use_container_width=True,
+                        ):
+                            result = engine.rename_category(category, new_name)
+                            if "error" in result:
+                                st.error(result["error"])
+                            else:
+                                st.toast(f"Renommé en « {result['to']} »", icon="✅")
+                                st.rerun()
+
+                        if st.button(
+                            "Supprimer le dossier",
+                            icon=":material/delete_outline:",
+                            key=f"confirm_del_cat_{category}",
+                            use_container_width=True,
+                        ):
+                            engine.delete_category(category)
+                            st.rerun()
 
                 docs = engine.df[engine.df["category"] == category]
                 for _, doc in docs.iterrows():
@@ -620,8 +809,7 @@ def render_documents_page(engine):
                     col_name, col_edit, col_delete = st.columns([7, 1, 1])
 
                     with col_name:
-                        if st.button(f"📄 {filename}", key=f"open_{filename}"):
-                            show_document_dialog(filename, doc["text"])
+                        render_document_opener(category, doc)
 
                     with col_edit:
                         with st.popover("", icon=":material/edit:", help="Corriger la catégorie"):
@@ -631,15 +819,15 @@ def render_documents_page(engine):
                             picked = st.selectbox(
                                 "Catégorie existante",
                                 options=["—"] + other_categories,
-                                key=f"pick_cat_{filename}",
+                                key=f"pick_cat_{category}_{filename}",
                             )
                             new_cat_free = st.text_input(
                                 "ou nouvelle catégorie",
-                                key=f"new_cat_{filename}",
+                                key=f"new_cat_{category}_{filename}",
                                 placeholder="Nom de la nouvelle catégorie",
                             )
 
-                            if st.button("Valider", key=f"confirm_correct_{filename}", type="primary"):
+                            if st.button("Valider", key=f"confirm_correct_{category}_{filename}", type="primary"):
                                 target = new_cat_free.strip() or (picked if picked != "—" else "")
 
                                 if not target:
@@ -656,7 +844,12 @@ def render_documents_page(engine):
                                         st.rerun()
 
                     with col_delete:
-                        if st.button("🗑️", key=f"del_doc_{filename}"):
+                        if st.button(
+                            "",
+                            icon=":material/delete_outline:",
+                            key=f"del_doc_{category}_{filename}",
+                            help="Supprimer ce document",
+                        ):
                             engine.delete_document(filename)
                             st.rerun()
 

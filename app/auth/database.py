@@ -1,4 +1,5 @@
 import sqlite3
+import secrets
 from pathlib import Path
 
 DB_PATH = Path("smartdoc.db")
@@ -47,6 +48,15 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -71,6 +81,46 @@ def get_user_by_email(email):
     user = cursor.fetchone()
     conn.close()
     return user
+
+
+def get_user_by_id(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    user = cursor.fetchone()
+    conn.close()
+    return user
+
+
+def create_session(user_id):
+    """Crée un jeton de session persistant (survit à un rafraîchissement de page)."""
+    token = secrets.token_urlsafe(32)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO sessions (token, user_id) VALUES (?, ?)",
+        (token, user_id)
+    )
+    conn.commit()
+    conn.close()
+    return token
+
+
+def get_session_user_id(token):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM sessions WHERE token = ?", (token,))
+    row = cursor.fetchone()
+    conn.close()
+    return row["user_id"] if row else None
+
+
+def delete_session(token):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
+    conn.commit()
+    conn.close()
 
 
 def add_document_record(user_id, filename, category, file_path):

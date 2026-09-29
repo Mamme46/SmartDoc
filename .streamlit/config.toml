@@ -9,6 +9,14 @@ backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F7F8FC"
 textColor = "#1F2430"
 
+[client]
+# Sans ça, toute exception non interceptée (bug de code, clé de widget en
+# double, erreur du moteur IA...) affiche dans le navigateur le message
+# d'erreur complet ET la stack trace avec des extraits du code source.
+# "none" : le visiteur ne voit qu'un message générique ; le détail complet
+# continue d'atterrir dans les logs du conteneur (docker logs) pour debug.
+showErrorDetails = "none"
+
 [server]
 # ai/.venv est physiquement dans le dossier du projet : sans cette exclusion,
 # Streamlit essaie de surveiller (pour le rechargement à chaud) chaque
