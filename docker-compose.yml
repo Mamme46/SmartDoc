@@ -7,9 +7,6 @@ services:
     volumes:
       - ollama_data:/root/.ollama
 
-    ports:
-      - "11434:11434"
-
     restart: unless-stopped
 
     healthcheck:
@@ -47,9 +44,6 @@ services:
 
     container_name: smartdoc-app
 
-    ports:
-      - "8501:8501"
-
     environment:
       OLLAMA_HOST: http://ollama:11434
 
@@ -57,7 +51,8 @@ services:
       TRANSFORMERS_CACHE: /root/.cache/huggingface
 
     volumes:
-      # Base de données persistante
+      # Ces montages restent sur l'hôte quand le conteneur est supprimé.
+      # Ne pas les remplacer par des volumes éphémères ni supprimer ces dossiers.
       - ./smartdoc.db:/app/smartdoc.db
 
       # Documents utilisateurs persistants
@@ -69,6 +64,45 @@ services:
     depends_on:
       ollama-init:
         condition: service_completed_successfully
+
+    restart: unless-stopped
+
+
+  session-cookie:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    command: ["python", "app/auth/cookie_server.py"]
+
+    environment:
+      SMARTDOC_DB_PATH: /app/smartdoc.db
+      SMARTDOC_COOKIE_SECURE: ${SMARTDOC_COOKIE_SECURE:-false}
+
+    volumes:
+      - ./smartdoc.db:/app/smartdoc.db
+
+    depends_on:
+      app:
+        condition: service_started
+
+    restart: unless-stopped
+
+
+  proxy:
+    image: nginx:alpine
+
+    ports:
+      - "127.0.0.1:8501:8501"
+
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+
+    depends_on:
+      app:
+        condition: service_started
+      session-cookie:
+        condition: service_started
 
     restart: unless-stopped
 

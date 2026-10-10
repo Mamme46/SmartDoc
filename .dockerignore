@@ -19,4 +19,21 @@ test_documents/
 .ipynb_checkpoints/
 
 # Base de données locale
-# smartdoc.db est volontairement conservée pour initialiser le conteneur
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Données privées persistées localement (documents, caches, imports temporaires)
+app/data/
+data/
+backup/
+backups/
+
+# Configuration et secrets locaux
+.env
+.env.*
+.streamlit/secrets.toml
+.streamlit/secrets.*.toml

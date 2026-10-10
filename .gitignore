@@ -9,15 +9,22 @@ __pycache__/
 *.db
 *.sqlite
 *.sqlite3
+*.db-*
+*.sqlite-*
+*.sqlite3-*
+smartdoc.db/
 
 # Training / demo datasets
 ai/data/bbc/
 ai/data/smartdoc_demo/
 
-# User-uploaded documents (real or simulated personal data)
-app/data/users/*/
+# Persistent user data (documents, database, caches and temporary uploads)
+app/data/**
+!app/data/users/
 !app/data/users/.gitkeep
-app/data/temp_uploads/
+/data/
+/backup/
+/backups/
 
 # Local test files
 test_documents/
@@ -25,3 +32,5 @@ test_documents/
 # Env files
 .env
 .env.*
+.streamlit/secrets.toml
+.streamlit/secrets.*.toml

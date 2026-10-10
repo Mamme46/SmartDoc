@@ -1,6 +1,7 @@
 import sys
 import base64
 import html as html_lib
+import json
 from pathlib import Path
 
 # Ajoute ai/src au chemin de recherche Python
@@ -18,7 +19,6 @@ from auth.database import (
     log_correction,
     create_session,
     get_session_user_id,
-    delete_session,
     get_user_by_id,
 )
 from auth.auth import register_user, login_user
@@ -433,20 +433,57 @@ if "user_id" not in st.session_state:
     st.session_state.user_id = None
     st.session_state.email = None
 
-    # Un rafraîchissement de page (F5) démarre une toute nouvelle session
-    # Streamlit : sans ce jeton porté par l'URL, l'utilisateur perdrait sa
-    # connexion et sa page à chaque refresh. Le jeton (non devinable) sert
-    # de clé de session côté serveur ; seul lui apparaît dans l'URL, jamais
-    # l'identifiant utilisateur, pour éviter qu'on puisse usurper un compte
-    # en modifiant l'URL.
-    session_token = st.query_params.get("session")
-    if session_token:
+    cookie_token = st.context.cookies.get("smartdoc_session")
+    legacy_query_token = st.query_params.get("session")
+    restored_user_id = (
+        get_session_user_id(cookie_token) if cookie_token else None
+    )
+    session_token = cookie_token
+    if restored_user_id is None and legacy_query_token:
+        session_token = legacy_query_token
         restored_user_id = get_session_user_id(session_token)
-        if restored_user_id is not None:
-            user = get_user_by_id(restored_user_id)
-            if user is not None:
-                st.session_state.user_id = restored_user_id
-                st.session_state.email = user["email"]
+
+    if restored_user_id is not None:
+        user = get_user_by_id(restored_user_id)
+        if user is not None:
+            st.session_state.user_id = restored_user_id
+            st.session_state.email = user["email"]
+            if legacy_query_token:
+                st.session_state.pending_session_cookie = session_token
+    elif cookie_token:
+        st.session_state.clear_session_cookie = True
+
+    if legacy_query_token:
+        st.query_params.pop("session", None)
+
+
+def render_session_cookie_action(action, token=None):
+    token_json = json.dumps(token)
+    st.html(
+        f"""
+        <p id="session-cookie-status">Mise à jour sécurisée de la session…</p>
+        <script>
+        (async () => {{
+            const status = document.getElementById("session-cookie-status");
+            try {{
+                const response = await fetch("/__session/{action}", {{
+                    method: "POST",
+                    headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify({{ token: {token_json} }}),
+                    credentials: "same-origin"
+                }});
+                if (!response.ok) {{
+                    throw new Error("Session request rejected");
+                }}
+                window.location.reload();
+            }} catch (_) {{
+                status.textContent = "Impossible de sécuriser la session. Recharge la page ou reconnecte-toi.";
+            }}
+        }})();
+        </script>
+        """,
+        unsafe_allow_javascript=True,
+    )
 
 
 # ============================================================
@@ -485,9 +522,7 @@ def show_login_page():
                     if submitted:
                         success, result = login_user(email, password)
                         if success:
-                            st.session_state.user_id = result
-                            st.session_state.email = email
-                            st.query_params["session"] = create_session(result)
+                            st.session_state.pending_session_cookie = create_session(result)
                             st.rerun()
                         else:
                             st.error(result)
@@ -601,12 +636,9 @@ def render_sidebar():
                 unsafe_allow_html=True
             )
             if st.button("↩  Déconnexion", key="logout_btn", use_container_width=True):
-                session_token = st.query_params.get("session")
-                if session_token:
-                    delete_session(session_token)
                 st.session_state.user_id = None
                 st.session_state.email = None
-                st.query_params.clear()
+                st.session_state.clear_session_cookie = True
                 st.rerun()
 
     return selected
@@ -920,7 +952,16 @@ def show_main_app():
 # ROUTAGE PRINCIPAL
 # ============================================================
 
-if st.session_state.user_id is None:
+if st.session_state.get("clear_session_cookie"):
+    render_session_cookie_action("clear")
+    st.stop()
+elif st.session_state.get("pending_session_cookie"):
+    render_session_cookie_action(
+        "set",
+        st.session_state.pending_session_cookie,
+    )
+    st.stop()
+elif st.session_state.user_id is None:
     show_login_page()
 else:
     show_main_app()

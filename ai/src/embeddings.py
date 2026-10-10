@@ -1,7 +1,3 @@
-import os
-
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-
 from sentence_transformers import SentenceTransformer
 
 _model = None

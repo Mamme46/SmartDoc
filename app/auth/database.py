@@ -1,12 +1,20 @@
-import sqlite3
+import os
 import secrets
+import sqlite3
 from pathlib import Path
 
-DB_PATH = Path("smartdoc.db")
+DB_PATH = Path(os.environ.get("SMARTDOC_DB_PATH", "smartdoc.db"))
+SESSION_TTL_HOURS = 12
 
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    db_path = DB_PATH
+    # Docker's short bind-mount syntax creates a directory when the host-side
+    # database file does not exist yet.
+    if db_path.is_dir():
+        db_path = db_path / "smartdoc.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row  # permet d'accéder aux colonnes par nom
     return conn
 
@@ -53,9 +61,23 @@ def init_db():
             token TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
+
+    session_columns = {
+        column["name"] for column in cursor.execute("PRAGMA table_info(sessions)")
+    }
+    if "expires_at" not in session_columns:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN expires_at TIMESTAMP")
+        cursor.execute(
+            "UPDATE sessions SET expires_at = datetime(created_at, ?)",
+            (f"+{SESSION_TTL_HOURS} hours",)
+        )
+    cursor.execute(
+        "DELETE FROM sessions WHERE expires_at IS NULL OR expires_at <= CURRENT_TIMESTAMP"
+    )
 
     conn.commit()
     conn.close()
@@ -93,13 +115,14 @@ def get_user_by_id(user_id):
 
 
 def create_session(user_id):
-    """Crée un jeton de session persistant (survit à un rafraîchissement de page)."""
+    """Crée un jeton de session qui expire après une durée limitée."""
     token = secrets.token_urlsafe(32)
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO sessions (token, user_id) VALUES (?, ?)",
-        (token, user_id)
+        "INSERT INTO sessions (token, user_id, expires_at) "
+        "VALUES (?, ?, datetime('now', ?))",
+        (token, user_id, f"+{SESSION_TTL_HOURS} hours")
     )
     conn.commit()
     conn.close()
@@ -109,7 +132,11 @@ def create_session(user_id):
 def get_session_user_id(token):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM sessions WHERE token = ?", (token,))
+    cursor.execute(
+        "SELECT user_id FROM sessions "
+        "WHERE token = ? AND expires_at > CURRENT_TIMESTAMP",
+        (token,)
+    )
     row = cursor.fetchone()
     conn.close()
     return row["user_id"] if row else None
