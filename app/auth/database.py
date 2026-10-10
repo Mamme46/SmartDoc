@@ -142,6 +142,22 @@ def get_session_user_id(token):
     return row["user_id"] if row else None
 
 
+def rotate_session(token):
+    """Replace a valid legacy token and return its replacement."""
+    replacement = secrets.token_urlsafe(32)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE sessions SET token = ? "
+        "WHERE token = ? AND expires_at > CURRENT_TIMESTAMP",
+        (replacement, token)
+    )
+    conn.commit()
+    rotated = cursor.rowcount == 1
+    conn.close()
+    return replacement if rotated else None
+
+
 def delete_session(token):
     conn = get_connection()
     cursor = conn.cursor()

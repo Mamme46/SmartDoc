@@ -19,6 +19,7 @@ from auth.database import (
     log_correction,
     create_session,
     get_session_user_id,
+    rotate_session,
     get_user_by_id,
 )
 from auth.auth import register_user, login_user
@@ -438,18 +439,24 @@ if "user_id" not in st.session_state:
     restored_user_id = (
         get_session_user_id(cookie_token) if cookie_token else None
     )
-    session_token = cookie_token
+    legacy_token_to_rotate = None
     if restored_user_id is None and legacy_query_token:
-        session_token = legacy_query_token
-        restored_user_id = get_session_user_id(session_token)
+        restored_user_id = get_session_user_id(legacy_query_token)
+        if restored_user_id is not None:
+            legacy_token_to_rotate = legacy_query_token
 
     if restored_user_id is not None:
         user = get_user_by_id(restored_user_id)
         if user is not None:
-            st.session_state.user_id = restored_user_id
-            st.session_state.email = user["email"]
-            if legacy_query_token:
-                st.session_state.pending_session_cookie = session_token
+            if legacy_token_to_rotate:
+                session_token = rotate_session(legacy_token_to_rotate)
+                if session_token:
+                    st.session_state.pending_session_cookie = session_token
+                else:
+                    restored_user_id = None
+            if restored_user_id is not None:
+                st.session_state.user_id = restored_user_id
+                st.session_state.email = user["email"]
     elif cookie_token:
         st.session_state.clear_session_cookie = True
 
