@@ -272,6 +272,9 @@ def inject_css():
             background: #FBFAFF;
             border: 1.5px dashed #D6D2F5;
         }
+        [class*="st-key-document_uploader"] [data-testid="stFileUploaderDropzoneInstructions"] {
+            display: none !important;
+        }
 
         /* ---- Bouton icône (suppression d'un document) ---- */
         [class*="st-key-del_doc_"] button {
@@ -668,7 +671,8 @@ def render_import_page(engine):
         uploaded_file = st.file_uploader(
             "Dépose un document (.txt, .md, .pdf, .docx)",
             type=["txt", "md", "pdf", "docx"],
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="document_uploader"
         )
 
         if uploaded_file is not None:
@@ -889,7 +893,7 @@ def render_documents_page(engine):
                             key=f"del_doc_{category}_{filename}",
                             help="Supprimer ce document",
                         ):
-                            engine.delete_document(filename)
+                            engine.delete_document(filename, category)
                             st.rerun()
 
 

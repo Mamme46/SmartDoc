@@ -32,6 +32,16 @@ Ne lance pas `docker compose down -v` pour supprimer un conteneur : cela
 supprime les volumes Docker (notamment les modèles), même si les montages de
 données locaux restent présents.
 
+### Index GraphRAG
+
+En plus des embeddings, chaque espace utilisateur conserve un graphe SQLite
+dans `app/data/users/<id>/.knowledge_graph.sqlite3`. À l'import, Ollama extrait
+les entités et relations explicitement présentes dans les passages. Le chatbot
+combine ensuite la recherche vectorielle avec les passages reliés par ces
+entités, y compris lorsqu'ils se trouvent dans des catégories différentes.
+Le fichier du graphe est privé comme les documents et doit être inclus dans les
+sauvegardes du dossier `app/data/users`.
+
 ### Sauvegarder et transférer les données
 
 Pour déplacer un compte vers un autre ordinateur, arrête d'abord l'application,

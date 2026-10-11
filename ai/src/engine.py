@@ -1,4 +1,5 @@
 import shutil
+import os
 import pickle
 import hashlib
 from pathlib import Path
@@ -12,6 +13,7 @@ from llm import (
     is_name_compatible,
     generate_rag_answer,
 )
+from knowledge_graph import KnowledgeGraph
 from text_extraction import extract_text, SUPPORTED_EXTENSIONS
 
 
@@ -22,6 +24,10 @@ class SmartDocEngine:
     """
 
     CACHE_FILENAME = ".embeddings_cache.pkl"
+    DOCUMENT_COLUMNS = ["filename", "text", "category", "path", "document_id"]
+    CHUNK_COLUMNS = [
+        "chunk_id", "document_id", "filename", "category", "chunk_index", "text"
+    ]
 
     def __init__(self, data_path, embedding_model, threshold=0.5,
                  high_confidence_threshold=0.95, chunk_size=100, chunk_overlap=20):
@@ -33,14 +39,15 @@ class SmartDocEngine:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
-        self.df = pd.DataFrame()
+        self.df = pd.DataFrame(columns=self.DOCUMENT_COLUMNS)
         self.document_embeddings = None
         self.category_document_embeddings = {}
 
-        self.chunks_df = pd.DataFrame()
+        self.chunks_df = pd.DataFrame(columns=self.CHUNK_COLUMNS)
         self.chunk_embeddings = None
 
         self._cache = {}
+        self.graph = KnowledgeGraph(self.data_path)
 
         self.load()
 
@@ -66,6 +73,7 @@ class SmartDocEngine:
         self._load_documents(old_cache, new_cache)
         self._build_category_embeddings()
         self._build_chunks(old_cache, new_cache)
+        self._sync_graph_documents()
 
         self._cache = new_cache
         self._write_cache()
@@ -136,10 +144,12 @@ class SmartDocEngine:
                     pending_texts.append(text)
                     pending_indices.append(index)
 
-        self.df = pd.DataFrame(documents)
+        self.df = pd.DataFrame(documents, columns=self.DOCUMENT_COLUMNS)
+        self.df["document_id"] = self.df["document_id"].astype("object")
 
         if len(self.df) == 0:
-            self.document_embeddings = np.empty((0, 768))
+            embedding_dim = self.embedding_model.get_embedding_dimension()
+            self.document_embeddings = np.empty((0, embedding_dim))
             return
 
         embedding_dim = self.embedding_model.get_embedding_dimension()
@@ -198,10 +208,12 @@ class SmartDocEngine:
 
             doc_blocks.append((start, chunk_texts, key, text_hash, cached_chunk_embeddings))
 
-        self.chunks_df = pd.DataFrame(chunk_records)
+        self.chunks_df = pd.DataFrame(chunk_records, columns=self.CHUNK_COLUMNS)
+        self.chunks_df["document_id"] = self.chunks_df["document_id"].astype("object")
 
         if len(chunk_records) == 0:
-            self.chunk_embeddings = np.empty((0, 768))
+            embedding_dim = self.embedding_model.get_embedding_dimension()
+            self.chunk_embeddings = np.empty((0, embedding_dim))
             return
 
         embedding_dim = self.embedding_model.get_embedding_dimension()
@@ -236,6 +248,31 @@ class SmartDocEngine:
                 offset += length
 
         self.chunk_embeddings = embeddings
+
+    def _sync_graph_documents(self):
+        """Synchronize persistent graph records and attach stable IDs to rows."""
+        document_keys = set()
+        for index, row in self.df.iterrows():
+            chunks = self.chunks_df[
+                (self.chunks_df["category"] == row["category"])
+                & (self.chunks_df["filename"] == row["filename"])
+            ]["text"].tolist()
+            document_id = self.graph.sync_document(
+                row["category"], row["filename"], row["text"], chunks
+            )
+            self.df.at[index, "document_id"] = document_id
+            mask = (
+                (self.chunks_df["category"] == row["category"])
+                & (self.chunks_df["filename"] == row["filename"])
+            )
+            self.chunks_df.loc[mask, "document_id"] = document_id
+            self.chunks_df.loc[mask, "chunk_id"] = [
+                f"{document_id}:{chunk_index}"
+                for chunk_index in self.chunks_df.loc[mask, "chunk_index"]
+            ]
+            document_keys.add((row["category"], row["filename"]))
+
+        self.graph.retain_documents(document_keys)
 
     def _chunk_text(self, text):
 
@@ -387,11 +424,6 @@ class SmartDocEngine:
 
         if confident_match:
             destination_category = category
-            # Réimport exact d'un fichier déjà classé ici : on remplace son
-            # ancienne entrée au lieu d'en dupliquer une nouvelle (sinon deux
-            # lignes identiques category+filename cassent l'affichage).
-            self._remove_existing_document(destination_category, file_path.name)
-            self.category_document_embeddings[category].append(embedding)
             action = "existing_category"
 
         else:
@@ -402,21 +434,36 @@ class SmartDocEngine:
 
             if existing_match:
                 destination_category = existing_match
-                self._remove_existing_document(destination_category, file_path.name)
-                self.category_document_embeddings[existing_match].append(embedding)
                 action = "existing_category"
             else:
                 destination_category = proposed_name
-                self.create_category(destination_category, embedding)
                 action = "new_category"
+
+        new_chunks = self._chunk_text(text)
+        try:
+            extracted_graph = None
+            if self.graph.needs_reindex(
+                destination_category, file_path.name, text, new_chunks
+            ):
+                extracted_graph = self.graph.extract_document(new_chunks)
+        except Exception as exc:
+            return {"error": f"Impossible d'indexer le graphe de {file_path.name} : {exc}"}
 
         destination_folder = self.data_path / destination_category
         destination_folder.mkdir(parents=True, exist_ok=True)
         destination_file = destination_folder / file_path.name
-        file_path.rename(destination_file)
+        os.replace(file_path, destination_file)
+
+        self._remove_existing_document(destination_category, file_path.name)
+        if destination_category in self.category_document_embeddings:
+            self.category_document_embeddings[destination_category].append(embedding)
+        else:
+            self.create_category(destination_category, embedding)
 
         # Met à jour df et les chunks pour que le document soit immédiatement cherchable
-        self._register_new_document(destination_file, destination_category, text)
+        self._register_new_document(
+            destination_file, destination_category, text, new_chunks, extracted_graph
+        )
 
         return {
             "category": destination_category,
@@ -425,29 +472,36 @@ class SmartDocEngine:
             "path": str(destination_file)
         }
 
-    def _register_new_document(self, file_path, category, text):
+    def _register_new_document(self, file_path, category, text, new_chunks=None,
+                               extracted_graph=None):
         """Ajoute le nouveau document à df et met à jour l'index de chunks."""
 
+        if new_chunks is None:
+            new_chunks = self._chunk_text(text)
+        document_id = self.graph.sync_document(
+            category, file_path.name, text, new_chunks, extracted_graph
+        )
         new_row = {
             "filename": file_path.name,
             "text": text,
             "category": category,
-            "path": str(file_path)
+            "path": str(file_path),
+            "document_id": document_id
         }
         self.df = pd.concat([self.df, pd.DataFrame([new_row])], ignore_index=True)
 
-        new_chunks = self._chunk_text(text)
         chunk_records = []
         for i, chunk in enumerate(new_chunks):
             chunk_records.append({
-                "chunk_id": f"{file_path.name}_{i}",
+                "chunk_id": f"{document_id}:{i}",
+                "document_id": document_id,
                 "filename": file_path.name,
                 "category": category,
                 "chunk_index": i,
                 "text": chunk
             })
 
-        new_chunks_df = pd.DataFrame(chunk_records)
+        new_chunks_df = pd.DataFrame(chunk_records, columns=self.CHUNK_COLUMNS)
         new_chunk_embeddings = self.embedding_model.encode(
             new_chunks_df["text"].tolist(),
             normalize_embeddings=True
@@ -460,15 +514,20 @@ class SmartDocEngine:
     # SUPPRESSION
     # --------------------------------------------------------
 
-    def delete_document(self, filename):
+    def delete_document(self, filename, category=None):
         """Supprime un document (fichier + index en mémoire)."""
 
         rows = self.df[self.df["filename"] == filename]
+        if category is not None:
+            rows = rows[rows["category"] == category]
         if rows.empty:
             return {"error": f"Document introuvable : {filename}"}
+        if len(rows) > 1:
+            return {"error": f"Plusieurs documents portent le nom {filename}; précise le dossier."}
 
         category = rows.iloc[0]["category"]
         file_path = Path(rows.iloc[0]["path"])
+        document_id = rows.iloc[0].get("document_id")
 
         cat_df = self.df[self.df["category"] == category].reset_index(drop=True)
         position = cat_df.index[cat_df["filename"] == filename][0]
@@ -478,11 +537,16 @@ class SmartDocEngine:
             if not self.category_document_embeddings[category]:
                 del self.category_document_embeddings[category]
 
-        self.df = self.df[self.df["filename"] != filename].reset_index(drop=True)
+        self.df = self.df[
+            ~((self.df["filename"] == filename) & (self.df["category"] == category))
+        ].reset_index(drop=True)
 
-        keep_mask = (self.chunks_df["filename"] != filename).values
+        keep_mask = (
+            self.chunks_df["document_id"] != document_id
+        ).values
         self.chunks_df = self.chunks_df[keep_mask].reset_index(drop=True)
         self.chunk_embeddings = self.chunk_embeddings[keep_mask]
+        self.graph.remove_document(category, filename)
 
         if file_path.exists():
             file_path.unlink()
@@ -496,7 +560,7 @@ class SmartDocEngine:
 
         filenames = self.df[self.df["category"] == category]["filename"].tolist()
         for filename in filenames:
-            self.delete_document(filename)
+            self.delete_document(filename, category)
 
         folder = self.data_path / category
         if folder.exists():
@@ -534,6 +598,7 @@ class SmartDocEngine:
 
         chunk_mask = self.chunks_df["category"] == old_name
         self.chunks_df.loc[chunk_mask, "category"] = new_name
+        self.graph.rename_category(old_name, new_name)
 
         return {"renamed_category": old_name, "to": new_name}
 
@@ -556,6 +621,7 @@ class SmartDocEngine:
             return {"error": "La nouvelle catégorie est identique à l'ancienne."}
 
         old_path = Path(rows.iloc[0]["path"])
+        document_id = rows.iloc[0]["document_id"]
         if not old_path.exists():
             return {"error": f"Fichier introuvable : {old_path}"}
 
@@ -597,9 +663,10 @@ class SmartDocEngine:
         self.df.at[df_index, "category"] = new_category
         self.df.at[df_index, "path"] = str(new_path)
         self.df.at[df_index, "text"] = text
+        self.graph.move_document(old_category, filename, new_category)
 
         # Met à jour les chunks associés (même catégorie, pour rester cohérent avec le RAG)
-        chunk_mask = self.chunks_df["filename"] == filename
+        chunk_mask = self.chunks_df["document_id"] == document_id
         self.chunks_df.loc[chunk_mask, "category"] = new_category
 
         return {"corrected": filename, "old_category": old_category, "new_category": new_category}
@@ -615,18 +682,43 @@ class SmartDocEngine:
 
         query_embedding = self.embedding_model.encode([query], normalize_embeddings=True)
         similarities = cosine_similarity(query_embedding, self.chunk_embeddings)[0]
-        top_indices = np.argsort(similarities)[::-1][:top_k]
+        seed_count = min(len(similarities), max(top_k, top_k * 2))
+        top_indices = np.argsort(similarities)[::-1][:seed_count]
 
-        results = []
+        results = {}
+        seed_chunk_ids = []
         for idx in top_indices:
-            results.append({
-                "filename": self.chunks_df.iloc[idx]["filename"],
-                "category": self.chunks_df.iloc[idx]["category"],
-                "chunk_text": self.chunks_df.iloc[idx]["text"],
-                "score": float(similarities[idx])
-            })
+            row = self.chunks_df.iloc[idx]
+            chunk_id = row["chunk_id"]
+            seed_chunk_ids.append(chunk_id)
+            results[chunk_id] = {
+                "chunk_id": chunk_id,
+                "document_id": row["document_id"],
+                "filename": row["filename"],
+                "category": row["category"],
+                "chunk_text": row["text"],
+                "score": float(similarities[idx]),
+                "graph_links": []
+            }
 
-        return results
+        for related in self.graph.expand_from_chunks(seed_chunk_ids, limit=top_k * 4):
+            graph_score = min(0.75, 0.45 + 0.05 * len(related["matched_entities"]))
+            result = results.get(related["chunk_id"])
+            if result is None:
+                result = {
+                    **related,
+                    "document_id": related["chunk_id"].rsplit(":", 1)[0],
+                    "score": graph_score
+                }
+                results[related["chunk_id"]] = result
+            else:
+                result["score"] = max(result["score"], graph_score)
+                result["graph_links"] = related["graph_links"]
+
+        return sorted(
+            results.values(),
+            key=lambda result: (-result["score"], result["category"], result["filename"])
+        )[:top_k]
 
     def answer(self, query, top_k=3):
 
@@ -640,13 +732,20 @@ class SmartDocEngine:
             }
 
         context = "\n\n".join([
-            f"[Source: {c['filename']}]\n{c['chunk_text']}"
+            f"[Source: {c['category']}/{c['filename']}]"
+            + (
+                f" [Lien du graphe: {'; '.join(c['graph_links'])}]"
+                if c.get("graph_links") else ""
+            )
+            + f"\n{c['chunk_text']}"
             for c in relevant_chunks
         ])
 
         answer_text = generate_rag_answer(query, context)
 
-        sources = list(dict.fromkeys([c["filename"] for c in relevant_chunks]))
+        sources = list(dict.fromkeys([
+            f"{c['category']}/{c['filename']}" for c in relevant_chunks
+        ]))
 
         return {
             "answer": answer_text,
