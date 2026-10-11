@@ -1,5 +1,50 @@
-import ollama
+import re
+import unicodedata
 from difflib import SequenceMatcher
+
+import ollama
+
+
+def _normalize_category_text(text):
+    normalized = unicodedata.normalize("NFKD", text.casefold())
+    return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
+def infer_document_category(text, filename=""):
+    """Return a concise French document-type label when the evidence is clear."""
+    normalized = _normalize_category_text(f"{filename}\n{text[:3000]}")
+    email_markers = r"\b(courriels?|e[- ]?mails?|emails?|objet)\b"
+    if re.search(email_markers, normalized):
+        if re.search(r"\b(fournisseur|livraison|commande|achats)\b", normalized):
+            return "Courriels fournisseurs"
+        return "Correspondance"
+
+    patterns = (
+        (r"\b(note de reunion|compte[- ]rendu|proces[- ]verbal|minutes de reunion)\b", "Comptes rendus"),
+        (r"\b(note de frais|remboursement de frais|justificatifs de frais)\b", "Notes de frais"),
+        (r"\b(procedure|mode operatoire|etapes de validation)\b", "Procédures"),
+        (r"\b(fiche fournisseur|presentation du fournisseur)\b", "Fournisseurs"),
+        (r"\b(note de service|communication interne)\b", "Notes internes"),
+        (r"\b(bulletin de paie|fiche de paie)\b", "Bulletins de paie"),
+        (r"\b(releve bancaire|releve de compte)\b", "Relevés bancaires"),
+        (r"\b(contrat|convention|avenant)\b", "Contrats"),
+        (r"\b(facture|montant ttc|total a payer)\b", "Factures"),
+        (r"\b(devis|estimation des couts)\b", "Devis"),
+        (r"\b(rapport annuel|rapport d activite|bilan d activite)\b", "Rapports"),
+        (r"\b(cv|curriculum vitae|lettre de motivation)\b", "Candidatures"),
+    )
+    for pattern, category in patterns:
+        if re.search(pattern, normalized):
+            return category
+
+    recipe_heading = r"\b(recette|ingredients|preparation|etapes de preparation)\b"
+    if (
+        re.search(recipe_heading, normalized)
+        and re.search(r"\b(ingredients|preparation|cuisson|four|minutes)\b", normalized)
+    ):
+        return "Recettes"
+
+    return None
 
 
 def generate_category_name(text, max_chars=800):
@@ -30,7 +75,7 @@ Nom de catégorie :"""
     response = ollama.chat(
         model="qwen2.5:3b",
         messages=[{"role": "user", "content": prompt}],
-        options={"temperature": 0.2}
+        options={"temperature": 0, "num_predict": 12}
     )
 
     category_name = response["message"]["content"].strip()
@@ -41,7 +86,7 @@ Nom de catégorie :"""
     if len(category_name.split()) > 4:
         category_name = " ".join(category_name.split()[:2])
 
-    return category_name.capitalize()
+    return category_name[:1].upper() + category_name[1:60]
 
 
 def find_similar_existing_category_name(new_name, existing_categories, threshold=0.85):

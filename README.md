@@ -36,9 +36,11 @@ données locaux restent présents.
 
 En plus des embeddings, chaque espace utilisateur conserve un graphe SQLite
 dans `app/data/users/<id>/.knowledge_graph.sqlite3`. À l'import, Ollama extrait
-les entités et relations explicitement présentes dans les passages. Le chatbot
-combine ensuite la recherche vectorielle avec les passages reliés par ces
-entités, y compris lorsqu'ils se trouvent dans des catégories différentes.
+les entités et relations explicitement présentes dans le document en arrière-plan,
+en un seul traitement par document. Les types courants (comptes rendus, courriels,
+factures, procédures, etc.) sont classés par règles rapides avant tout appel au
+modèle de nommage. Le chatbot combine ensuite la recherche vectorielle avec les
+passages reliés par ces entités, y compris dans des catégories différentes.
 Le fichier du graphe est privé comme les documents et doit être inclus dans les
 sauvegardes du dossier `app/data/users`.
 

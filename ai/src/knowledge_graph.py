@@ -4,7 +4,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-from graph_extraction import extract_entities_and_relations
+from graph_extraction import extract_document_graph
 
 
 class KnowledgeGraph:
@@ -32,6 +32,7 @@ class KnowledgeGraph:
                     filename TEXT NOT NULL,
                     content_hash TEXT NOT NULL,
                     chunks_hash TEXT NOT NULL,
+                    graph_indexed INTEGER NOT NULL DEFAULT 0,
                     UNIQUE(category, filename)
                 );
                 CREATE TABLE IF NOT EXISTS chunks (
@@ -67,6 +68,14 @@ class KnowledgeGraph:
                 CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_entity_id);
                 CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_entity_id);
             """)
+            document_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(documents)")
+            }
+            if "graph_indexed" not in document_columns:
+                connection.execute(
+                    "ALTER TABLE documents ADD COLUMN graph_indexed INTEGER NOT NULL DEFAULT 0"
+                )
 
     @staticmethod
     def _hash(value):
@@ -79,7 +88,7 @@ class KnowledgeGraph:
     def needs_reindex(self, category, filename, text, chunks):
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT content_hash, chunks_hash FROM documents "
+                "SELECT content_hash, chunks_hash, graph_indexed FROM documents "
                 "WHERE category = ? AND filename = ?",
                 (category, filename)
             ).fetchone()
@@ -87,20 +96,22 @@ class KnowledgeGraph:
             row is None
             or row["content_hash"] != self._hash(text)
             or row["chunks_hash"] != self._chunks_hash(chunks)
+            or not row["graph_indexed"]
         )
 
     @staticmethod
     def extract_document(chunks):
-        return [extract_entities_and_relations(chunk) for chunk in chunks]
+        return extract_document_graph(chunks)
 
-    def sync_document(self, category, filename, text, chunks, extracted_chunks=None):
+    def sync_document(self, category, filename, text, chunks, extracted_chunks=None,
+                      graph_indexed=True):
         """Create or update graph data, retaining the document identity on edits."""
         content_hash = self._hash(text)
         chunks_hash = self._chunks_hash(chunks)
 
         with self._connect() as connection:
             existing = connection.execute(
-                "SELECT id, content_hash, chunks_hash FROM documents "
+                "SELECT id, content_hash, chunks_hash, graph_indexed FROM documents "
                 "WHERE category = ? AND filename = ?",
                 (category, filename)
             ).fetchone()
@@ -108,11 +119,16 @@ class KnowledgeGraph:
                 existing is not None
                 and existing["content_hash"] == content_hash
                 and existing["chunks_hash"] == chunks_hash
+                and (existing["graph_indexed"] or not graph_indexed)
             ):
                 return existing["id"]
 
-        if extracted_chunks is None:
+        if extracted_chunks is None and graph_indexed:
             extracted_chunks = self.extract_document(chunks)
+        if extracted_chunks is None:
+            extracted_chunks = [
+                {"entities": [], "relations": []} for _ in chunks
+            ]
         if len(extracted_chunks) != len(chunks):
             raise ValueError("Le nombre de résultats d'extraction ne correspond pas aux passages.")
 
@@ -125,54 +141,89 @@ class KnowledgeGraph:
             if existing:
                 connection.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
                 connection.execute(
-                    "UPDATE documents SET content_hash = ?, chunks_hash = ? WHERE id = ?",
-                    (content_hash, chunks_hash, document_id)
+                    "UPDATE documents SET content_hash = ?, chunks_hash = ?, graph_indexed = ? "
+                    "WHERE id = ?",
+                    (content_hash, chunks_hash, int(graph_indexed), document_id)
                 )
             else:
                 connection.execute(
-                    "INSERT INTO documents (id, category, filename, content_hash, chunks_hash) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (document_id, category, filename, content_hash, chunks_hash)
+                    "INSERT INTO documents "
+                    "(id, category, filename, content_hash, chunks_hash, graph_indexed) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (document_id, category, filename, content_hash, chunks_hash, int(graph_indexed))
                 )
 
-            for index, (chunk, graph_data) in enumerate(zip(chunks, extracted_chunks)):
-                chunk_id = f"{document_id}:{index}"
-                connection.execute(
-                    "INSERT INTO chunks (id, document_id, chunk_index, text) VALUES (?, ?, ?, ?)",
-                    (chunk_id, document_id, index, chunk)
-                )
-                entity_ids = {}
-                for entity in graph_data["entities"]:
-                    normalized = " ".join(entity["name"].split()).casefold()
-                    connection.execute(
-                        "INSERT OR IGNORE INTO entities (name, normalized_name, entity_type) "
-                        "VALUES (?, ?, ?)",
-                        (entity["name"], normalized, entity["type"])
-                    )
-                    row = connection.execute(
-                        "SELECT id FROM entities WHERE normalized_name = ? AND entity_type = ?",
-                        (normalized, entity["type"])
-                    ).fetchone()
-                    entity_ids[entity["name"].casefold()] = row["id"]
-                    connection.execute(
-                        "INSERT OR IGNORE INTO mentions (chunk_id, entity_id) VALUES (?, ?)",
-                        (chunk_id, row["id"])
-                    )
-
-                for relation in graph_data["relations"]:
-                    source_id = entity_ids.get(relation["source"].casefold())
-                    target_id = entity_ids.get(relation["target"].casefold())
-                    if source_id is None or target_id is None or source_id == target_id:
-                        continue
-                    connection.execute(
-                        "INSERT OR IGNORE INTO relations "
-                        "(source_entity_id, target_entity_id, relation_type, chunk_id) "
-                        "VALUES (?, ?, ?, ?)",
-                        (source_id, target_id, relation["type"], chunk_id)
-                    )
-
+            self._insert_graph_records(connection, document_id, chunks, extracted_chunks)
             self._remove_orphan_entities(connection)
         return document_id
+
+    def replace_document_graph(self, document_id, text, chunks, extracted_chunks):
+        """Atomically replace graph records if the source document is unchanged."""
+        if len(extracted_chunks) != len(chunks):
+            raise ValueError("Le nombre de résultats d'extraction ne correspond pas aux passages.")
+        content_hash = self._hash(text)
+        chunks_hash = self._chunks_hash(chunks)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT content_hash, chunks_hash, graph_indexed "
+                "FROM documents WHERE id = ?",
+                (document_id,)
+            ).fetchone()
+            if (
+                row is None
+                or row["content_hash"] != content_hash
+                or row["chunks_hash"] != chunks_hash
+                or row["graph_indexed"]
+            ):
+                return False
+
+            connection.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
+            self._insert_graph_records(connection, document_id, chunks, extracted_chunks)
+            connection.execute(
+                "UPDATE documents SET graph_indexed = 1 WHERE id = ?",
+                (document_id,)
+            )
+            self._remove_orphan_entities(connection)
+        return True
+
+    @staticmethod
+    def _insert_graph_records(connection, document_id, chunks, extracted_chunks):
+        for index, (chunk, graph_data) in enumerate(zip(chunks, extracted_chunks)):
+            chunk_id = f"{document_id}:{index}"
+            connection.execute(
+                "INSERT INTO chunks (id, document_id, chunk_index, text) VALUES (?, ?, ?, ?)",
+                (chunk_id, document_id, index, chunk)
+            )
+            entity_ids = {}
+            for entity in graph_data["entities"]:
+                normalized = " ".join(entity["name"].split()).casefold()
+                connection.execute(
+                    "INSERT OR IGNORE INTO entities (name, normalized_name, entity_type) "
+                    "VALUES (?, ?, ?)",
+                    (entity["name"], normalized, entity["type"])
+                )
+                row = connection.execute(
+                    "SELECT id FROM entities WHERE normalized_name = ? AND entity_type = ?",
+                    (normalized, entity["type"])
+                ).fetchone()
+                entity_ids[entity["name"].casefold()] = row["id"]
+                connection.execute(
+                    "INSERT OR IGNORE INTO mentions (chunk_id, entity_id) VALUES (?, ?)",
+                    (chunk_id, row["id"])
+                )
+
+            for relation in graph_data["relations"]:
+                source_id = entity_ids.get(relation["source"].casefold())
+                target_id = entity_ids.get(relation["target"].casefold())
+                if source_id is None or target_id is None or source_id == target_id:
+                    continue
+                connection.execute(
+                    "INSERT OR IGNORE INTO relations "
+                    "(source_entity_id, target_entity_id, relation_type, chunk_id) "
+                    "VALUES (?, ?, ?, ?)",
+                    (source_id, target_id, relation["type"], chunk_id)
+                )
 
     @staticmethod
     def _remove_orphan_entities(connection):

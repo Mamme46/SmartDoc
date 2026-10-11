@@ -1,7 +1,9 @@
-import shutil
+import hashlib
+import logging
 import os
 import pickle
-import hashlib
+import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -9,12 +11,15 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from llm import (
     generate_category_name,
+    infer_document_category,
     find_similar_existing_category_name,
-    is_name_compatible,
     generate_rag_answer,
 )
 from knowledge_graph import KnowledgeGraph
 from text_extraction import extract_text, SUPPORTED_EXTENSIONS
+
+_GRAPH_INDEXER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="graph-index")
+_LOGGER = logging.getLogger(__name__)
 
 
 class SmartDocEngine:
@@ -252,27 +257,69 @@ class SmartDocEngine:
     def _sync_graph_documents(self):
         """Synchronize persistent graph records and attach stable IDs to rows."""
         document_keys = set()
+        pending_graphs = []
         for index, row in self.df.iterrows():
             chunks = self.chunks_df[
                 (self.chunks_df["category"] == row["category"])
                 & (self.chunks_df["filename"] == row["filename"])
             ]["text"].tolist()
-            document_id = self.graph.sync_document(
-                row["category"], row["filename"], row["text"], chunks
-            )
+            category = row["category"]
+            filename = row["filename"]
+            if self.graph.needs_reindex(category, filename, row["text"], chunks):
+                document_id = self.graph.sync_document(
+                    category,
+                    filename,
+                    row["text"],
+                    chunks,
+                    graph_indexed=False
+                )
+                pending_graphs.append((document_id, row["text"], chunks, category, filename))
+            else:
+                document_id = self.graph.get_document_id(category, filename)
             self.df.at[index, "document_id"] = document_id
             mask = (
-                (self.chunks_df["category"] == row["category"])
-                & (self.chunks_df["filename"] == row["filename"])
+                (self.chunks_df["category"] == category)
+                & (self.chunks_df["filename"] == filename)
             )
             self.chunks_df.loc[mask, "document_id"] = document_id
             self.chunks_df.loc[mask, "chunk_id"] = [
                 f"{document_id}:{chunk_index}"
                 for chunk_index in self.chunks_df.loc[mask, "chunk_index"]
             ]
-            document_keys.add((row["category"], row["filename"]))
+            document_keys.add((category, filename))
 
         self.graph.retain_documents(document_keys)
+        for document_id, text, chunks, category, filename in pending_graphs:
+            self._schedule_graph_index(document_id, text, chunks, category, filename)
+
+    def _schedule_graph_index(self, document_id, text, chunks, category, filename):
+        _GRAPH_INDEXER.submit(
+            self._index_document_graph,
+            document_id,
+            text,
+            chunks,
+            category,
+            filename
+        )
+
+    def _index_document_graph(self, document_id, text, chunks, category, filename):
+        try:
+            extracted_graph = self.graph.extract_document(chunks)
+            updated = self.graph.replace_document_graph(
+                document_id, text, chunks, extracted_graph
+            )
+            if not updated:
+                _LOGGER.info(
+                    "Skipped stale graph-index result for %s/%s",
+                    category,
+                    filename
+                )
+        except Exception:
+            _LOGGER.exception(
+                "Graph indexing failed for %s/%s",
+                category,
+                filename
+            )
 
     def _chunk_text(self, text):
 
@@ -404,51 +451,31 @@ class SmartDocEngine:
         very_confident_match = (
             duplicate_category is not None and duplicate_score >= self.high_confidence_threshold
         )
+        inferred_category = infer_document_category(text, file_path.name)
+
         if very_confident_match:
-            category = duplicate_category
-
-        if not very_confident_match:
-            # Un score élevé mais pas quasi parfait ne suffit pas : des
-            # documents de nature différente (facture vs contrat, bulletin de
-            # paie vs relevé bancaire...) peuvent être proches en embedding à
-            # cause de leur mise en forme commune. On confirme donc la fusion
-            # avec le nom que le LLM donnerait au document, comparé au nom de
-            # la catégorie candidate.
-            proposed_name = generate_category_name(text)
-
-        confident_match = very_confident_match or (
-            score >= self.threshold
-            and category is not None
-            and is_name_compatible(proposed_name, category)
-        )
-
-        if confident_match:
+            destination_category = duplicate_category
+            action = "existing_category"
+        elif inferred_category:
+            existing_match = find_similar_existing_category_name(
+                inferred_category,
+                self.category_document_embeddings.keys()
+            )
+            destination_category = existing_match or inferred_category
+            action = "existing_category" if existing_match else "new_category"
+        elif category is not None and score >= max(self.threshold, 0.65):
             destination_category = category
             action = "existing_category"
-
         else:
+            proposed_name = generate_category_name(text)
             existing_match = find_similar_existing_category_name(
                 proposed_name,
                 self.category_document_embeddings.keys()
             )
-
-            if existing_match:
-                destination_category = existing_match
-                action = "existing_category"
-            else:
-                destination_category = proposed_name
-                action = "new_category"
+            destination_category = existing_match or proposed_name
+            action = "existing_category" if existing_match else "new_category"
 
         new_chunks = self._chunk_text(text)
-        try:
-            extracted_graph = None
-            if self.graph.needs_reindex(
-                destination_category, file_path.name, text, new_chunks
-            ):
-                extracted_graph = self.graph.extract_document(new_chunks)
-        except Exception as exc:
-            return {"error": f"Impossible d'indexer le graphe de {file_path.name} : {exc}"}
-
         destination_folder = self.data_path / destination_category
         destination_folder.mkdir(parents=True, exist_ok=True)
         destination_file = destination_folder / file_path.name
@@ -461,9 +488,7 @@ class SmartDocEngine:
             self.create_category(destination_category, embedding)
 
         # Met à jour df et les chunks pour que le document soit immédiatement cherchable
-        self._register_new_document(
-            destination_file, destination_category, text, new_chunks, extracted_graph
-        )
+        self._register_new_document(destination_file, destination_category, text, new_chunks)
 
         return {
             "category": destination_category,
@@ -472,14 +497,20 @@ class SmartDocEngine:
             "path": str(destination_file)
         }
 
-    def _register_new_document(self, file_path, category, text, new_chunks=None,
-                               extracted_graph=None):
+    def _register_new_document(self, file_path, category, text, new_chunks=None):
         """Ajoute le nouveau document à df et met à jour l'index de chunks."""
 
         if new_chunks is None:
             new_chunks = self._chunk_text(text)
         document_id = self.graph.sync_document(
-            category, file_path.name, text, new_chunks, extracted_graph
+            category,
+            file_path.name,
+            text,
+            new_chunks,
+            graph_indexed=False
+        )
+        needs_graph_index = self.graph.needs_reindex(
+            category, file_path.name, text, new_chunks
         )
         new_row = {
             "filename": file_path.name,
@@ -509,6 +540,10 @@ class SmartDocEngine:
 
         self.chunks_df = pd.concat([self.chunks_df, new_chunks_df], ignore_index=True)
         self.chunk_embeddings = np.vstack([self.chunk_embeddings, new_chunk_embeddings])
+        if needs_graph_index:
+            self._schedule_graph_index(
+                document_id, text, new_chunks, category, file_path.name
+            )
 
     # --------------------------------------------------------
     # SUPPRESSION
