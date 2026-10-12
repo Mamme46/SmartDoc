@@ -44,6 +44,17 @@ passages reliés par ces entités, y compris dans des catégories différentes.
 Le fichier du graphe est privé comme les documents et doit être inclus dans les
 sauvegardes du dossier `app/data/users`.
 
+### Conversations du chatbot
+
+Les conversations et leurs messages sont enregistrés dans la base SQLite
+`smartdoc.db`, séparément pour chaque compte. Dans la barre latérale, le bouton
+`+` près de Chatbot affiche l'historique et devient `−` pour le refermer. Il
+permet aussi de créer une nouvelle conversation. Chaque discussion peut être
+supprimée après confirmation. Le chatbot conserve le contexte récent d'une
+conversation pour interpréter les questions de suivi.
+Le titre de chaque conversation est généré à partir de l'idée principale de sa
+première question, sous la forme d'une courte reformulation.
+
 ### Sauvegarder et transférer les données
 
 Pour déplacer un compte vers un autre ordinateur, arrête d'abord l'application,

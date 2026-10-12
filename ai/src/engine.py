@@ -14,6 +14,7 @@ from llm import (
     infer_document_category,
     find_similar_existing_category_name,
     generate_rag_answer,
+    generate_conversation_title,
 )
 from knowledge_graph import KnowledgeGraph
 from text_extraction import extract_text, SUPPORTED_EXTENSIONS
@@ -755,9 +756,16 @@ class SmartDocEngine:
             key=lambda result: (-result["score"], result["category"], result["filename"])
         )[:top_k]
 
-    def answer(self, query, top_k=3):
+    def answer(self, query, top_k=3, conversation_history=None):
 
-        relevant_chunks = self.search_chunks(query, top_k=top_k)
+        conversation_history = conversation_history or []
+        previous_questions = [
+            message["content"]
+            for message in conversation_history
+            if message["role"] == "user"
+        ][-2:]
+        retrieval_query = "\n".join([*previous_questions, query])
+        relevant_chunks = self.search_chunks(retrieval_query, top_k=top_k)
 
         if not relevant_chunks:
             return {
@@ -776,7 +784,11 @@ class SmartDocEngine:
             for c in relevant_chunks
         ])
 
-        answer_text = generate_rag_answer(query, context)
+        answer_text = generate_rag_answer(
+            query,
+            context,
+            conversation_history=conversation_history
+        )
 
         sources = list(dict.fromkeys([
             f"{c['category']}/{c['filename']}" for c in relevant_chunks
@@ -787,3 +799,6 @@ class SmartDocEngine:
             "sources": sources,
             "chunks_used": relevant_chunks
         }
+
+    def suggest_conversation_title(self, query):
+        return generate_conversation_title(query)

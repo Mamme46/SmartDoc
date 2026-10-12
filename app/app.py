@@ -1,3 +1,4 @@
+import logging
 import sys
 import base64
 import html as html_lib
@@ -13,7 +14,6 @@ sys.path.append(str(Path(__file__).parent.parent / "ai" / "src"))
 # a pourtant pas besoin. Voir load_model()/load_engine() ci-dessous.
 
 import streamlit as st
-from streamlit_option_menu import option_menu
 from auth.database import (
     init_db,
     log_correction,
@@ -21,9 +21,17 @@ from auth.database import (
     get_session_user_id,
     rotate_session,
     get_user_by_id,
+    add_chat_message,
+    create_chat_conversation,
+    delete_chat_conversation,
+    get_chat_conversation,
+    get_chat_messages,
+    list_chat_conversations,
 )
 from auth.auth import register_user, login_user
 from text_extraction import extract_text
+
+_LOGGER = logging.getLogger(__name__)
 
 init_db()
 
@@ -92,6 +100,133 @@ def inject_css():
             flex-direction: column;
             height: 100%;
             padding-top: 1.25rem;
+        }
+        .st-key-sd_navigation[data-testid="stVerticalBlock"] {
+            gap: 0 !important;
+            row-gap: 0 !important;
+        }
+        .st-key-sd_navigation [data-testid="stElementContainer"] {
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        [class*="st-key-nav_page_"] button {
+            width: 100%;
+            justify-content: flex-start !important;
+            background: #FFFFFF !important;
+            border: 1px solid transparent !important;
+            border-radius: 8px !important;
+            box-shadow: none !important;
+            color: #374151 !important;
+            font-size: 14.5px !important;
+            font-weight: 500 !important;
+            text-align: left !important;
+            min-height: unset !important;
+            padding: 9px 12px !important;
+            margin: 0 !important;
+        }
+        [class*="st-key-nav_page_"] button > div {
+            width: 100%;
+            justify-content: flex-start !important;
+            gap: 12px !important;
+        }
+        [class*="st-key-nav_page_"] button svg {
+            color: #6B7280 !important;
+        }
+        .st-key-toggle_chat_history button {
+            min-height: 2.5rem !important;
+            padding: 6px !important;
+            border: 1px solid transparent !important;
+            border-radius: 8px !important;
+            color: #6B7280 !important;
+            box-shadow: none !important;
+        }
+        .st-key-toggle_chat_history button:hover {
+            background: #F3F4F8 !important;
+            color: var(--accent-dark) !important;
+        }
+        .st-key-sd_chat_history {
+            padding: 2px 0 6px 12px;
+            max-height: 260px;
+            overflow-y: auto;
+        }
+        .st-key-sd_chat_history[data-testid="stVerticalBlock"] {
+            gap: 4px !important;
+            row-gap: 4px !important;
+        }
+        .st-key-sd_chat_history [data-testid="stElementContainer"] {
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .st-key-new_chat_conversation button {
+            min-height: 2.2rem !important;
+            justify-content: flex-start !important;
+            padding: 5px 10px !important;
+            color: var(--accent-dark) !important;
+            font-size: 13px !important;
+            border: 1px solid transparent !important;
+            box-shadow: none !important;
+        }
+        .st-key-new_chat_conversation button > div {
+            width: 100%;
+            justify-content: flex-start !important;
+            gap: 8px !important;
+        }
+        .st-key-new_chat_conversation button:hover {
+            background: #F3F4F8 !important;
+        }
+        .st-key-sd_chat_history [class*="st-key-chat_conversation_"] button {
+            min-height: 2.2rem !important;
+            justify-content: flex-start !important;
+            padding: 5px 10px !important;
+            color: #4B5563 !important;
+            font-size: 13px !important;
+            font-weight: 400 !important;
+            border: 1px solid transparent !important;
+            box-shadow: none !important;
+        }
+        .st-key-sd_chat_history [class*="st-key-chat_conversation_"] button > div {
+            width: 100%;
+            justify-content: flex-start !important;
+        }
+        .st-key-sd_chat_history [class*="st-key-chat_conversation_"] button:hover {
+            background: #F3F4F8 !important;
+        }
+        .st-key-sd_chat_history [class*="st-key-chat_conversation_"] button[kind="primary"] {
+            background: var(--accent-soft) !important;
+            color: var(--accent-dark) !important;
+        }
+        .st-key-sd_chat_history [class*="st-key-delete_chat_"] [data-testid="stPopover"] button {
+            width: 2rem !important;
+            min-width: 2rem !important;
+            min-height: 2rem !important;
+            padding: 0 !important;
+            border-radius: 50% !important;
+            background: transparent !important;
+            color: #9CA3AF !important;
+            border: none !important;
+            box-shadow: none !important;
+            transition: background-color 120ms ease, color 120ms ease !important;
+        }
+        .st-key-sd_chat_history [class*="st-key-delete_chat_"] [data-testid="stPopover"] button svg {
+            width: 17px !important;
+            height: 17px !important;
+        }
+        .st-key-sd_chat_history [class*="st-key-delete_chat_"] [data-testid="stPopover"] button:hover {
+            background: #FFF1F0 !important;
+            color: #D45B55 !important;
+        }
+        [class*="st-key-nav_page_"] button:hover {
+            background: #F3F4F8 !important;
+            border-color: transparent !important;
+            color: #374151 !important;
+        }
+        [class*="st-key-nav_page_"] button[kind="primary"] {
+            background: var(--accent-soft) !important;
+            color: var(--accent-dark) !important;
+            font-weight: 600 !important;
+        }
+        [class*="st-key-nav_page_"] button[kind="primary"] svg {
+            color: var(--accent-dark) !important;
         }
 
         .sd-brand {
@@ -587,6 +722,27 @@ PAGES = ["Import", "Mes documents", "Chatbot"]
 
 def render_sidebar():
 
+    user_id = st.session_state.user_id
+    if st.session_state.get("chat_state_user_id") != user_id:
+        st.session_state.chat_state_user_id = user_id
+        st.session_state.active_chat_conversation_id = None
+        st.session_state.chat_history_open = False
+        st.query_params.pop("history", None)
+
+    chat_history_open = st.query_params.get("history") == "open"
+    st.session_state.chat_history_open = chat_history_open
+    conversations = list_chat_conversations(user_id)
+    conversation_ids = {conversation["id"] for conversation in conversations}
+    requested_conversation = st.query_params.get("conversation")
+    if requested_conversation and requested_conversation.isdigit():
+        requested_id = int(requested_conversation)
+        if requested_id in conversation_ids:
+            st.session_state.active_chat_conversation_id = requested_id
+    active_conversation_id = st.session_state.get("active_chat_conversation_id")
+    if active_conversation_id not in conversation_ids:
+        active_conversation_id = conversations[0]["id"] if conversations else None
+        st.session_state.active_chat_conversation_id = active_conversation_id
+
     with st.sidebar:
         st.markdown(
             """
@@ -599,40 +755,142 @@ def render_sidebar():
             unsafe_allow_html=True
         )
 
-        # Retrouve la page active après un rafraîchissement de page (F5),
-        # sinon un refresh ramènerait toujours sur "Import" (default_index).
-        current_page = st.query_params.get("page")
-        default_index = PAGES.index(current_page) if current_page in PAGES else 0
-
-        selected = option_menu(
-            menu_title=None,
-            options=PAGES,
-            icons=["upload", "folder2-open", "chat-dots"],
-            default_index=default_index,
-            styles={
-                "container": {"padding": "0", "background-color": "#FFFFFF"},
-                "icon": {"color": "#6B7280", "font-size": "15px"},
-                "nav-link": {
-                    "font-size": "14.5px",
-                    "font-weight": "500",
-                    "text-align": "left",
-                    "margin": "2px 0",
-                    "padding": "9px 12px",
-                    "border-radius": "8px",
-                    "color": "#374151",
-                    "background-color": "#FFFFFF",
-                    "--hover-color": "#F3F4F8",
-                },
-                "nav-link-selected": {
-                    "background-color": "#EEEBFD",
-                    "color": "#5A4BD1",
-                    "font-weight": "600",
-                },
-            },
+        query_page = st.query_params.get("page")
+        selected = st.session_state.get(
+            "active_page",
+            query_page if query_page in PAGES else PAGES[0]
         )
+        page_icons = {
+            "Import": ":material/upload:",
+            "Mes documents": ":material/folder_open:",
+            "Chatbot": ":material/chat:",
+        }
+        with st.container(key="sd_navigation"):
+            for page in PAGES:
+                page_key = page.lower().replace(" ", "_")
+                if page == "Chatbot":
+                    nav_col, add_col = st.columns([0.86, 0.14], gap="small")
+                    with nav_col:
+                        clicked = st.button(
+                            page,
+                            key=f"nav_page_{page_key}",
+                            icon=page_icons[page],
+                            type="primary" if page == selected else "secondary",
+                            use_container_width=True,
+                        )
+                    with add_col:
+                        show_conversations = st.button(
+                            "",
+                            key="toggle_chat_history",
+                            icon=(
+                                ":material/remove:"
+                                if chat_history_open
+                                else ":material/add:"
+                            ),
+                            help=(
+                                "Masquer les conversations"
+                                if chat_history_open
+                                else "Afficher les conversations et en créer une nouvelle"
+                            ),
+                            use_container_width=True,
+                        )
+                    if clicked:
+                        selected = page
+                        st.session_state.active_page = page
+                        st.query_params["page"] = page
+                    if show_conversations:
+                        st.session_state.active_page = page
+                        selected = page
+                        st.query_params["page"] = page
+                        if chat_history_open:
+                            st.query_params.pop("history", None)
+                        else:
+                            st.query_params["history"] = "open"
+                        st.rerun()
+                    if chat_history_open:
+                        with st.container(key="sd_chat_history"):
+                            if st.button(
+                                "Nouvelle conversation",
+                                key="new_chat_conversation",
+                                icon=":material/add:",
+                                use_container_width=True,
+                            ):
+                                active_conversation_id = create_chat_conversation(user_id)
+                                conversations = list_chat_conversations(user_id)
+                                st.session_state.active_chat_conversation_id = active_conversation_id
+                                st.session_state.active_page = page
+                                st.session_state.chat_history_open = True
+                                selected = page
+                                st.query_params["page"] = page
+                                st.query_params["conversation"] = str(active_conversation_id)
 
-        if selected != current_page:
-            st.query_params["page"] = selected
+                            if not conversations:
+                                st.caption("Aucune conversation pour le moment.")
+                            for conversation in conversations:
+                                conversation_id = conversation["id"]
+                                title = conversation["title"]
+                                conversation_col, actions_col = st.columns(
+                                    [0.86, 0.14],
+                                    gap="small"
+                                )
+                                with conversation_col:
+                                    if st.button(
+                                        title,
+                                        key=f"chat_conversation_{conversation_id}",
+                                        icon=":material/chat_bubble_outline:",
+                                        type=(
+                                            "primary"
+                                            if conversation_id == active_conversation_id
+                                            else "secondary"
+                                        ),
+                                        use_container_width=True,
+                                    ):
+                                        active_conversation_id = conversation_id
+                                        st.session_state.active_chat_conversation_id = conversation_id
+                                        st.session_state.active_page = page
+                                        selected = page
+                                        st.query_params["page"] = page
+                                        st.query_params["conversation"] = str(conversation_id)
+                                with actions_col:
+                                    with st.popover(
+                                        "",
+                                        key=f"delete_chat_{conversation_id}",
+                                        icon=":material/delete_outline:",
+                                        help="Supprimer cette discussion",
+                                        use_container_width=True,
+                                    ):
+                                        st.caption("Cette discussion et ses messages seront supprimés.")
+                                        if st.button(
+                                            "Supprimer",
+                                            key=f"confirm_delete_chat_{conversation_id}",
+                                            type="primary",
+                                            use_container_width=True,
+                                        ):
+                                            if delete_chat_conversation(user_id, conversation_id):
+                                                remaining = list_chat_conversations(user_id)
+                                                if conversation_id == active_conversation_id:
+                                                    active_chat_id = (
+                                                        remaining[0]["id"] if remaining else None
+                                                    )
+                                                    st.session_state.active_chat_conversation_id = active_chat_id
+                                                    if active_chat_id is None:
+                                                        st.query_params.pop("conversation", None)
+                                                    else:
+                                                        st.query_params["conversation"] = str(active_chat_id)
+                                                st.rerun()
+                                            else:
+                                                st.error("Cette discussion n'existe plus.")
+                else:
+                    if st.button(
+                        page,
+                        key=f"nav_page_{page_key}",
+                        icon=page_icons[page],
+                        type="primary" if page == selected else "secondary",
+                        use_container_width=True,
+                    ):
+                        selected = page
+                        st.session_state.active_page = page
+                        st.query_params["page"] = page
 
         with st.container(key="sd_footer"):
             initial = (st.session_state.email or "?")[0].upper()
@@ -903,43 +1161,77 @@ def render_documents_page(engine):
 
 def render_chatbot_page(engine):
 
+    user_id = st.session_state.user_id
+    conversation_id = st.session_state.get("active_chat_conversation_id")
+    conversation = (
+        get_chat_conversation(user_id, conversation_id)
+        if conversation_id is not None else None
+    )
+    if conversation is None:
+        conversation_id = create_chat_conversation(user_id)
+        st.session_state.active_chat_conversation_id = conversation_id
+        st.query_params["conversation"] = str(conversation_id)
+        st.rerun()
+
     st.markdown('<div class="page-title">Chatbot</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="page-subtitle">Pose une question sur tes documents, en langage naturel.</div>',
         unsafe_allow_html=True
     )
 
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-
-    for msg in st.session_state.chat_history:
+    messages = get_chat_messages(user_id, conversation_id)
+    for msg in messages:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
-            if msg["role"] == "assistant" and msg.get("sources"):
+            if msg["role"] == "assistant" and msg["sources"]:
                 st.caption(f"📚 Sources : {', '.join(msg['sources'])}")
 
-    question = st.chat_input("Ta question...")
+    question = st.chat_input("Ta question...", key=f"chat_input_{conversation_id}")
 
     if question:
+        title = None
+        if not messages:
+            try:
+                title = engine.suggest_conversation_title(question)
+            except Exception:
+                _LOGGER.warning(
+                    "Could not generate a title for chat conversation %s",
+                    conversation_id,
+                    exc_info=True,
+                )
 
-        st.session_state.chat_history.append({"role": "user", "content": question})
+        if not add_chat_message(
+            user_id,
+            conversation_id,
+            "user",
+            question,
+            title=title
+        ):
+            st.error("Cette conversation n'est plus disponible.")
+            return
 
         with st.chat_message("user"):
             st.write(question)
 
         with st.chat_message("assistant"):
             with st.spinner("Recherche dans tes documents..."):
-                response = engine.answer(question)
+                response = engine.answer(
+                    question,
+                    conversation_history=messages[-8:]
+                )
 
             st.write(response["answer"])
             if response["sources"]:
                 st.caption(f"📚 Sources : {', '.join(response['sources'])}")
 
-        st.session_state.chat_history.append({
-            "role": "assistant",
-            "content": response["answer"],
-            "sources": response["sources"]
-        })
+        if not add_chat_message(
+            user_id,
+            conversation_id,
+            "assistant",
+            response["answer"],
+            response["sources"]
+        ):
+            st.error("La réponse a été générée, mais n'a pas pu être enregistrée dans cette conversation.")
 
 
 # ============================================================

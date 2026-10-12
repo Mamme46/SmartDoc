@@ -117,11 +117,19 @@ def is_name_compatible(name_a, name_b, threshold=0.4):
     return SequenceMatcher(None, name_a.lower(), name_b.lower()).ratio() >= threshold
 
 
-def generate_rag_answer(query, context, temperature=0.3):
+def generate_rag_answer(query, context, temperature=0.3, conversation_history=None):
     """
     Génère une réponse en langage naturel à partir d'une question
     et d'un contexte de chunks pertinents.
     """
+
+    history_text = ""
+    if conversation_history:
+        history_text = "\n\nÉchanges précédents de cette conversation (à utiliser uniquement pour comprendre les références de la question) :\n"
+        history_text += "\n".join(
+            f"{'Utilisateur' if message['role'] == 'user' else 'Assistant'} : {message['content']}"
+            for message in conversation_history[-8:]
+        )
 
     prompt = f"""Tu es l'assistant de SmartDoc, une application qui aide à retrouver 
 des informations dans des documents personnels.
@@ -129,6 +137,7 @@ des informations dans des documents personnels.
 Voici des extraits de documents potentiellement pertinents :
 
 {context}
+{history_text}
 
 Question de l'utilisateur : {query}
 
@@ -147,3 +156,28 @@ Réponse :"""
     )
 
     return response["message"]["content"].strip()
+
+
+def generate_conversation_title(query):
+    prompt = f"""Résume l'idée principale de la question ci-dessous en un titre de conversation court.
+
+Consignes :
+- Réponds uniquement par un titre en français, sans guillemets ni ponctuation finale
+- Reformule le sujet, ne recopie pas la question
+- Utilise 3 à 6 mots, sans ajouter d'information absente de la question
+
+Question : {query}
+
+Titre :"""
+
+    response = ollama.chat(
+        model="qwen2.5:3b",
+        messages=[{"role": "user", "content": prompt}],
+        options={"temperature": 0.2, "num_predict": 24}
+    )
+
+    title = response["message"]["content"].strip().strip("\"'“”‘’` ")
+    title = " ".join(title.split()).rstrip(" .!?;:")
+    if not title:
+        raise ValueError("Le modèle n'a pas renvoyé de titre de conversation.")
+    return title[:60].rstrip()
