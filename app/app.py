@@ -965,6 +965,13 @@ def render_import_page(engine):
 
                 if "error" in result:
                     st.error(result["error"])
+                elif result["action"] == "already_classified":
+                    raw_path.unlink(missing_ok=True)
+                    st.info(
+                        f"Ce document a déjà été classé dans "
+                        f"**{result['category']}** sous le nom "
+                        f"**{result['filename']}**."
+                    )
                 else:
                     if result["action"] == "new_category":
                         st.success(
@@ -972,8 +979,13 @@ def render_import_page(engine):
                             f"(score: {result['score']:.3f})"
                         )
                     else:
+                        saved_name = result.get("filename", uploaded_file.name)
+                        name_notice = (
+                            f" sous le nom **{saved_name}**"
+                            if saved_name != uploaded_file.name else ""
+                        )
                         st.success(
-                            f"📁 Rangé dans : **{result['category']}** "
+                            f"📁 Rangé dans : **{result['category']}**{name_notice} "
                             f"(score: {result['score']:.3f})"
                         )
 

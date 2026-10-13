@@ -435,6 +435,19 @@ class SmartDocEngine:
         if not text.strip():
             return {"error": f"Le document est vide : {file_path.name}"}
 
+        same_document = self.df[
+            (self.df["filename"].str.casefold() == file_path.name.casefold())
+            & (self.df["text"] == text)
+        ]
+        if not same_document.empty:
+            existing = same_document.iloc[0]
+            return {
+                "action": "already_classified",
+                "category": existing["category"],
+                "filename": existing["filename"],
+                "path": existing["path"],
+            }
+
         embedding = self.embedding_model.encode([text], normalize_embeddings=True)[0]
 
         category, score, closest_document, duplicate_category, duplicate_score = (
@@ -480,9 +493,17 @@ class SmartDocEngine:
         destination_folder = self.data_path / destination_category
         destination_folder.mkdir(parents=True, exist_ok=True)
         destination_file = destination_folder / file_path.name
+        filename_index = 2
+        while destination_file.exists() or (
+            (self.df["category"] == destination_category)
+            & (self.df["filename"].str.casefold() == destination_file.name.casefold())
+        ).any():
+            destination_file = destination_folder / (
+                f"{file_path.stem} ({filename_index}){file_path.suffix}"
+            )
+            filename_index += 1
         os.replace(file_path, destination_file)
 
-        self._remove_existing_document(destination_category, file_path.name)
         if destination_category in self.category_document_embeddings:
             self.category_document_embeddings[destination_category].append(embedding)
         else:
@@ -495,6 +516,7 @@ class SmartDocEngine:
             "category": destination_category,
             "score": float(score),
             "action": action,
+            "filename": destination_file.name,
             "path": str(destination_file)
         }
 

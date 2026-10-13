@@ -44,6 +44,12 @@ passages reliés par ces entités, y compris dans des catégories différentes.
 Le fichier du graphe est privé comme les documents et doit être inclus dans les
 sauvegardes du dossier `app/data/users`.
 
+À l'import, un document n'est considéré comme déjà classé que si son nom de
+fichier et son texte extrait correspondent tous les deux à un document existant.
+Même texte sous un autre nom et même nom avec un contenu différent restent
+classables ; en cas de collision de nom dans le dossier cible, le nouveau fichier
+reçoit un suffixe numérique pour préserver les deux documents.
+
 ### Conversations du chatbot
 
 Les conversations et leurs messages sont enregistrés dans la base SQLite
