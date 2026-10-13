@@ -117,12 +117,7 @@ def is_name_compatible(name_a, name_b, threshold=0.4):
     return SequenceMatcher(None, name_a.lower(), name_b.lower()).ratio() >= threshold
 
 
-def generate_rag_answer(query, context, temperature=0.3, conversation_history=None):
-    """
-    Génère une réponse en langage naturel à partir d'une question
-    et d'un contexte de chunks pertinents.
-    """
-
+def _build_rag_prompt(query, context, conversation_history):
     history_text = ""
     if conversation_history:
         history_text = "\n\nÉchanges précédents de cette conversation (à utiliser uniquement pour comprendre les références de la question) :\n"
@@ -148,14 +143,42 @@ Consignes :
 - Réponds en français, de façon claire et concise
 
 Réponse :"""
+    return prompt
 
+
+def generate_rag_answer(query, context, temperature=0.3, conversation_history=None):
+    """
+    Génère une réponse en langage naturel à partir d'une question
+    et d'un contexte de chunks pertinents.
+    """
     response = ollama.chat(
         model="qwen2.5:3b",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{
+            "role": "user",
+            "content": _build_rag_prompt(query, context, conversation_history),
+        }],
         options={"temperature": temperature}
     )
 
     return response["message"]["content"].strip()
+
+
+def generate_rag_answer_stream(query, context, temperature=0.3, conversation_history=None):
+    """Yield response text as Ollama generates it."""
+    response_stream = ollama.chat(
+        model="qwen2.5:3b",
+        messages=[{
+            "role": "user",
+            "content": _build_rag_prompt(query, context, conversation_history),
+        }],
+        options={"temperature": temperature},
+        stream=True,
+    )
+
+    for chunk in response_stream:
+        content = chunk["message"]["content"]
+        if content:
+            yield content
 
 
 def generate_conversation_title(query):

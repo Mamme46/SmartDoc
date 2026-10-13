@@ -14,6 +14,7 @@ from llm import (
     infer_document_category,
     find_similar_existing_category_name,
     generate_rag_answer,
+    generate_rag_answer_stream,
     generate_conversation_title,
 )
 from knowledge_graph import KnowledgeGraph
@@ -778,8 +779,7 @@ class SmartDocEngine:
             key=lambda result: (-result["score"], result["category"], result["filename"])
         )[:top_k]
 
-    def answer(self, query, top_k=3, conversation_history=None):
-
+    def _prepare_answer(self, query, top_k, conversation_history):
         conversation_history = conversation_history or []
         previous_questions = [
             message["content"]
@@ -788,7 +788,27 @@ class SmartDocEngine:
         ][-2:]
         retrieval_query = "\n".join([*previous_questions, query])
         relevant_chunks = self.search_chunks(retrieval_query, top_k=top_k)
+        if not relevant_chunks:
+            return [], "", []
 
+        context = "\n\n".join([
+            f"[Source: {chunk['category']}/{chunk['filename']}]"
+            + (
+                f" [Lien du graphe: {'; '.join(chunk['graph_links'])}]"
+                if chunk.get("graph_links") else ""
+            )
+            + f"\n{chunk['chunk_text']}"
+            for chunk in relevant_chunks
+        ])
+        sources = list(dict.fromkeys([
+            f"{chunk['category']}/{chunk['filename']}" for chunk in relevant_chunks
+        ]))
+        return relevant_chunks, context, sources
+
+    def answer(self, query, top_k=3, conversation_history=None):
+        relevant_chunks, context, sources = self._prepare_answer(
+            query, top_k, conversation_history
+        )
         if not relevant_chunks:
             return {
                 "answer": "Aucun document n'est encore disponible pour répondre à cette question.",
@@ -796,30 +816,39 @@ class SmartDocEngine:
                 "chunks_used": []
             }
 
-        context = "\n\n".join([
-            f"[Source: {c['category']}/{c['filename']}]"
-            + (
-                f" [Lien du graphe: {'; '.join(c['graph_links'])}]"
-                if c.get("graph_links") else ""
-            )
-            + f"\n{c['chunk_text']}"
-            for c in relevant_chunks
-        ])
-
         answer_text = generate_rag_answer(
             query,
             context,
             conversation_history=conversation_history
         )
 
-        sources = list(dict.fromkeys([
-            f"{c['category']}/{c['filename']}" for c in relevant_chunks
-        ]))
-
         return {
             "answer": answer_text,
             "sources": sources,
             "chunks_used": relevant_chunks
+        }
+
+    def stream_answer(self, query, top_k=3, conversation_history=None):
+        relevant_chunks, context, sources = self._prepare_answer(
+            query, top_k, conversation_history
+        )
+        if not relevant_chunks:
+            return {
+                "answer_stream": iter([
+                    "Aucun document n'est encore disponible pour répondre à cette question."
+                ]),
+                "sources": [],
+                "chunks_used": [],
+            }
+
+        return {
+            "answer_stream": generate_rag_answer_stream(
+                query,
+                context,
+                conversation_history=conversation_history,
+            ),
+            "sources": sources,
+            "chunks_used": relevant_chunks,
         }
 
     def suggest_conversation_title(self, query):

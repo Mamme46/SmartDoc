@@ -1227,12 +1227,12 @@ def render_chatbot_page(engine):
 
         with st.chat_message("assistant"):
             with st.spinner("Recherche dans tes documents..."):
-                response = engine.answer(
+                response = engine.stream_answer(
                     question,
                     conversation_history=messages[-8:]
                 )
+                answer_text = st.write_stream(response["answer_stream"])
 
-            st.write(response["answer"])
             if response["sources"]:
                 st.caption(f"📚 Sources : {', '.join(response['sources'])}")
 
@@ -1240,11 +1240,10 @@ def render_chatbot_page(engine):
             user_id,
             conversation_id,
             "assistant",
-            response["answer"],
+            answer_text,
             response["sources"]
         ):
             st.error("La réponse a été générée, mais n'a pas pu être enregistrée dans cette conversation.")
-
 
 # ============================================================
 # APP PRINCIPALE
