@@ -225,7 +225,26 @@ def inject_css():
             color: var(--accent-dark) !important;
             font-weight: 600 !important;
         }
-        [class*="st-key-nav_page_"] button[kind="primary"] svg {
+        [class*="st-key-nav_page_"] button[kind="primary"],
+        [class*="st-key-nav_page_"] button[kind="primary"]:hover,
+        [class*="st-key-nav_page_"] button[kind="primary"]:focus,
+        [class*="st-key-nav_page_"] button[kind="primary"]:focus-visible,
+        [class*="st-key-nav_page_"] button[kind="primary"]:active {
+            background: var(--accent-soft) !important;
+            color: var(--accent-dark) !important;
+            box-shadow: none !important;
+            outline: none !important;
+        }
+        [class*="st-key-nav_page_"] button[kind="secondary"]:focus,
+        [class*="st-key-nav_page_"] button[kind="secondary"]:focus-visible,
+        [class*="st-key-nav_page_"] button[kind="secondary"]:active {
+            background: #F3F4F8 !important;
+            color: #374151 !important;
+            box-shadow: none !important;
+            outline: none !important;
+        }
+        [class*="st-key-nav_page_"] button[kind="primary"] svg,
+        [class*="st-key-nav_page_"] button[kind="primary"] p {
             color: var(--accent-dark) !important;
         }
 
@@ -637,6 +656,10 @@ def render_session_cookie_action(action, token=None):
 
 def show_login_page():
 
+    for param in ("page", "history", "conversation"):
+        st.query_params.pop(param, None)
+    st.session_state.pop("active_page", None)
+
     _, center, _ = st.columns([1, 1.1, 1])
 
     with center:
@@ -795,9 +818,9 @@ def render_sidebar():
                             use_container_width=True,
                         )
                     if clicked:
-                        selected = page
                         st.session_state.active_page = page
                         st.query_params["page"] = page
+                        st.rerun()
                     if show_conversations:
                         st.session_state.active_page = page
                         selected = page
@@ -888,9 +911,9 @@ def render_sidebar():
                         type="primary" if page == selected else "secondary",
                         use_container_width=True,
                     ):
-                        selected = page
                         st.session_state.active_page = page
                         st.query_params["page"] = page
+                        st.rerun()
 
         with st.container(key="sd_footer"):
             initial = (st.session_state.email or "?")[0].upper()
@@ -907,6 +930,7 @@ def render_sidebar():
                 st.session_state.user_id = None
                 st.session_state.email = None
                 st.session_state.clear_session_cookie = True
+                st.session_state.pop("active_page", None)
                 st.rerun()
 
     return selected
