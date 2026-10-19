@@ -1,8 +1,17 @@
+import os
 import re
 import unicodedata
 from difflib import SequenceMatcher
 
 import ollama
+
+# Utiliser tous les vCPU fait chuter Ollama à ~1 token/s sur les CPU hybrides
+# (cœurs P/E) : on laisse de la marge au reste du système.
+OLLAMA_NUM_THREAD = int(os.getenv("OLLAMA_NUM_THREAD", "6"))
+
+
+def ollama_options(**options):
+    return {"num_thread": OLLAMA_NUM_THREAD, **options}
 
 
 def _normalize_category_text(text):
@@ -75,7 +84,7 @@ Nom de catégorie :"""
     response = ollama.chat(
         model="qwen2.5:3b",
         messages=[{"role": "user", "content": prompt}],
-        options={"temperature": 0, "num_predict": 12}
+        options=ollama_options(temperature=0, num_predict=12)
     )
 
     category_name = response["message"]["content"].strip()
@@ -157,7 +166,7 @@ def generate_rag_answer(query, context, temperature=0.3, conversation_history=No
             "role": "user",
             "content": _build_rag_prompt(query, context, conversation_history),
         }],
-        options={"temperature": temperature}
+        options=ollama_options(temperature=temperature)
     )
 
     return response["message"]["content"].strip()
@@ -171,7 +180,7 @@ def generate_rag_answer_stream(query, context, temperature=0.3, conversation_his
             "role": "user",
             "content": _build_rag_prompt(query, context, conversation_history),
         }],
-        options={"temperature": temperature},
+        options=ollama_options(temperature=temperature),
         stream=True,
     )
 
@@ -196,7 +205,7 @@ Titre :"""
     response = ollama.chat(
         model="qwen2.5:3b",
         messages=[{"role": "user", "content": prompt}],
-        options={"temperature": 0.2, "num_predict": 24}
+        options=ollama_options(temperature=0.2, num_predict=24)
     )
 
     title = response["message"]["content"].strip().strip("\"'“”‘’` ")

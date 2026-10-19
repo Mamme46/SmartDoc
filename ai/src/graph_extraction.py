@@ -2,6 +2,8 @@ import json
 
 import ollama
 
+from llm import ollama_options
+
 
 def _extract_graph(text, passage_count=None):
     passage_rules = ""
@@ -35,7 +37,7 @@ Document :
         model="qwen2.5:3b",
         messages=[{"role": "user", "content": prompt}],
         format="json",
-        options={"temperature": 0, "num_predict": 320}
+        options=ollama_options(temperature=0, num_predict=320)
     )
     content = response["message"]["content"]
     data = json.loads(content)
